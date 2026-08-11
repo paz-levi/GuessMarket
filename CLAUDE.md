@@ -2,6 +2,17 @@
 # Role: You are a Senior Java Tech Lead. Enforce every rule below without exception.
 # Target: Build a rock-solid, extensible foundation for a multi-exercise trading-simulator project.
 
+## Source of Truth
+This file is a curated summary of the official exercise spec, not the spec itself. It may not
+cover every detail. Before guessing at any ambiguous behavior, check these scoped reference
+files (Exercise 1 only — deliberately excludes Exercises 2-4 and Order Book, to avoid
+over-engineering ahead of scope):
+- `docs-reference/exercise1-requirements.md` — general system overview + full Ex1 requirements
+- `docs-reference/lmsr-appendix.md` — LMSR formulas and the worked numeric example
+- `docs-reference/xml-schema-appendix.md` — the Ex1 XML element/attribute table
+  If the answer isn't in `CLAUDE.md` or any of these three files, stop and ask rather than
+  guessing.
+
 ---
 
 ## 0. Context — This Is a Rolling Project
@@ -36,12 +47,12 @@ decision made here has downstream cost in Exercises 2 and 3. Weigh decisions acc
   **1-based**. Internally you may use 0-based arrays/Lists — but the number the user types and
   the number you print must always start at 1. Never expose index 0 as a valid choice.
 - **Console output — hard restrictions:**
-    - **No colors, ever.** No ANSI codes, no third-party console-coloring library. This has
-      broken grading environments in past semesters — treat it as a compile-time-enforced rule.
-    - **Never clear the screen** between commands. Output history stays visible for the whole
-      session.
-    - Application loop: show menu → read command → execute (which may prompt for more input) →
-      print the result of that command → show menu again → repeat until Exit.
+  - **No colors, ever.** No ANSI codes, no third-party console-coloring library. This has
+    broken grading environments in past semesters — treat it as a compile-time-enforced rule.
+  - **Never clear the screen** between commands. Output history stays visible for the whole
+    session.
+  - Application loop: show menu → read command → execute (which may prompt for more input) →
+    print the result of that command → show menu again → repeat until Exit.
 
 ---
 
@@ -137,16 +148,16 @@ Captured here so nothing gets forgotten once implementation starts:
   **invalid** file must leave any previously loaded valid state untouched. Successive valid
   loads are allowed, each one fully replacing the last.
 - **Commission:** integer, inclusive range **0–90**. Two collection modes:
-    - `on-purchase` — charged to the buyer, added on top of the stock price, paid immediately.
-    - `on-close` — charged only to the winners, deducted from payout at event close.
+  - `on-purchase` — charged to the buyer, added on top of the stock price, paid immediately.
+  - `on-close` — charged only to the winners, deducted from payout at event close.
 - Required commands (menu, 1-based selection throughout):
-    1. Load XML events file
-    2. List events
-    3. Event trading status (current prices, event account state, total commission collected
-       so far, trade history newest-first)
-    4. Participate in an event (buy only — no selling in Ex1)
-    5. Close an event (declare winning option, settle payouts)
-    6. Exit
+  1. Load XML events file
+  2. List events
+  3. Event trading status (current prices, event account state, total commission collected
+     so far, trade history newest-first)
+  4. Participate in an event (buy only — no selling in Ex1)
+  5. Close an event (declare winning option, settle payouts)
+  6. Exit
 - **File path input:** full path, may contain spaces (e.g. `Program Files`); path characters
   must be English-only. Extension check: ending in `.xml` qualifies it as "an XML file" for
   this first check — deeper structural/semantic validity is a separate step.
@@ -198,3 +209,41 @@ Do the following and **stop for my approval before writing any business logic**:
 5. **Do not implement** XML parsing, LMSR math, or the `ui` menu loop logic yet.
 
 Show me the resulting structure, interface, and DTO/exception shapes before proceeding.
+
+---
+
+## 7. Documentation — Macro + Micro
+
+Two layers, serving two different purposes. Neither replaces the other.
+
+### Macro — `ARCHITECTURE.md` (the big picture: how classes connect)
+
+At the end of every implementation stage, **before** stopping for approval, create or update
+`ARCHITECTURE.md` at the project root. For every file/class created or meaningfully changed in
+that stage, add or update an entry with:
+
+- **What it is** — one plain-language sentence. Assume the reader is new to Java.
+- **Why it exists** — what problem it solves, in this project specifically.
+- **What it connects to** — which classes call it, which classes it calls, and what data flows
+  through it (e.g. `"ui.EventMenu calls IEngine.listEvents() → returns List<EventSummaryDto> →
+  printed one row per event, 1-based"`).
+
+Group entries by module (`engine`, `ui`). Treat the file as **append-only** across stages. The
+first time this section is followed, backfill entries for everything already built in Step 1
+(the skeleton) before adding anything new.
+
+### Micro — one-line comments on functions (what each piece does)
+
+Every non-trivial method (anything beyond a plain getter/setter) gets **one short comment line
+directly above it** — plain language, one sentence, states what the method does. Not a full
+Javadoc block, not a paragraph — just enough that reading the method signature plus that one
+line tells you what it does without reading the body.
+
+Example of the bar to hit — short, not elaborate:
+```java
+// Computes the LMSR cost difference for buying shareQuantity shares of one option.
+public double calculatePurchaseCost(Event event, EventOption option, int shareQuantity) { ... }
+```
+
+The first time this section is followed, backfill these one-line comments onto everything
+already built in Step 1 (the skeleton) as well.
