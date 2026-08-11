@@ -242,8 +242,8 @@ line tells you what it does without reading the body.
 Example of the bar to hit — short, not elaborate:
 ```java
 // Computes the LMSR cost difference for buying shareQuantity shares of one option.
-public double calculatePurchaseCost(Event event, EventOption option, int shareQuantity) { ... }
-```
+//public double calculatePurchaseCost(Event event, EventOption option, int shareQuantity) { ... }
+//```
 
 The first time this section is followed, backfill these one-line comments onto everything
 already built in Step 1 (the skeleton) as well.

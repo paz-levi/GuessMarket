@@ -2,12 +2,7 @@ package dto;
 
 import java.util.List;
 
-/**
- * Full "event trading status" view (command 3): current prices, the event's MM account
- * state, total commission collected so far, and trade history newest-first. Also doubles as
- * the return shape for {@code closeEvent}, showing the event's final settled state.
- * Fields only, no behavior.
- */
+// The full "event trading status" view: prices, MM account state, commission collected, and trade history.
 public record EventStatusDto(
         int eventId,
         String eventName,
