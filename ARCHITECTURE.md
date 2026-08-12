@@ -286,29 +286,37 @@ the intentionally top-level, `ui`-facing packages.
   closed). Both share one private `validateOptionNumber()` helper.
 - **Why it exists:** Same shape and reasoning as `engine.impl.xml.EventsFileLoader` — keeps
   `EngineImpl.participateInEvent()`/`closeEvent()` thin delegators instead of god-methods, and
-  gives trading-rule validation (bad option number, non-positive share quantity, and — via
-  `EngineImpl.findActiveEvent()` before either method is even called — a closed event)
-  exactly one home. Takes an `Event` object, not an id: it never touches `EngineImpl`'s
-  `events` map, so event lookup/existence/active-state checking stays entirely `EngineImpl`'s
-  job.
+  gives trading-rule validation (bad option number, non-positive share quantity, a share
+  quantity large enough to overflow the LMSR math, and — via `EngineImpl.findActiveEvent()`
+  before either method is even called — a closed event) exactly one home. Takes an `Event`
+  object, not an id: it never touches `EngineImpl`'s `events` map, so event lookup/existence/
+  active-state checking stays entirely `EngineImpl`'s job.
 - **What it connects to:** Called by `EngineImpl.participateInEvent()`/`closeEvent()` after
   `findActiveEvent()` has already confirmed the event exists and is `ACTIVE`.
-  `participate()` computes cost via `LmsrMath.purchaseCost()`, applies commission only when
-  `CommissionMode.ON_PURCHASE` (0 under `ON_CLOSE`), then calls `EventOption.addShares()`,
-  `MarketMakerAccount.credit()`, `MarketMakerAccount.addCommissionCollected()`, and
-  `Event.addTrade()`. `close()` reads the winning `EventOption.getSharesOutstanding()` as the
-  payout owed, computes commission only when `CommissionMode.ON_CLOSE` (already collected
-  per-trade under `ON_PURCHASE`, so 0 here), calls `MarketMakerAccount.addCommissionCollected()`
-  (when non-zero) and `MarketMakerAccount.debit(payoutOwed - commissionAmount)`, then
-  `Event.close(winningOption)` — both mutate the same `Event` object `EngineImpl` already
-  holds a reference to. `participate()` returns the new `Trade`, which
-  `EngineImpl.toTradeConfirmationDto()` combines with a freshly-built `EventStatusDto` (via
-  `toStatusDto()`) into the `TradeConfirmationDto` `ui` will eventually receive; `close()`
-  returns nothing — `EngineImpl.closeEvent()` calls `toStatusDto()` on the same,
-  now-`CLOSED` `Event` afterward. Covered by
+  `participate()` first checks that the *resulting* share count for the chosen option, divided
+  by the event's liquidity parameter, stays at or under `MAX_SAFE_SHARES_OVER_LIQUIDITY` (700 —
+  comfortably under `Math.exp`'s ~709.78 overflow point) — rejecting with `IllegalTradeException`
+  before touching any state if not, since `Math.exp` overflows to `Infinity` silently rather than
+  throwing, and that `Infinity` would otherwise propagate all the way to `ui` as a garbage
+  `Infinity`/`NaN` display (found and fixed during a Day 7+ follow-up: 100,000 shares against
+  b=100 used to "succeed" with exactly that garbage). Only then computes cost via
+  `LmsrMath.purchaseCost()`, applies commission only when `CommissionMode.ON_PURCHASE` (0 under
+  `ON_CLOSE`), then calls `EventOption.addShares()`, `MarketMakerAccount.credit()`,
+  `MarketMakerAccount.addCommissionCollected()`, and `Event.addTrade()`. `close()` reads the
+  winning `EventOption.getSharesOutstanding()` as the payout owed, computes commission only when
+  `CommissionMode.ON_CLOSE` (already collected per-trade under `ON_PURCHASE`, so 0 here), calls
+  `MarketMakerAccount.addCommissionCollected()` (when non-zero) and
+  `MarketMakerAccount.debit(payoutOwed - commissionAmount)`, then `Event.close(winningOption)` —
+  both mutate the same `Event` object `EngineImpl` already holds a reference to. `participate()`
+  returns the new `Trade`, which `EngineImpl.toTradeConfirmationDto()` combines with a
+  freshly-built `EventStatusDto` (via `toStatusDto()`) into the `TradeConfirmationDto` `ui`
+  receives; `close()` returns nothing — `EngineImpl.closeEvent()` calls `toStatusDto()` on the
+  same, now-`CLOSED` `Event` afterward. Covered by
   `engine/test/engine/impl/trading/TradeExecutorTest.java` (commission math for both modes and
-  both operations, the negative-balance-is-not-clamped case, and the validation-rejection
-  paths), run by the same `test.bat` as `LmsrMathTest`.
+  both operations, the negative-balance-is-not-clamped case, the validation-rejection paths,
+  and — for the overflow guard specifically — both the exact 100,000-share/b=100 case that
+  surfaced the bug and a just-under-the-threshold case confirming legitimate large purchases
+  still work), run by the same `test.bat` as `LmsrMathTest`.
 
 ### `dto` package
 
@@ -445,7 +453,8 @@ the intentionally top-level, `ui`-facing packages.
 
 #### `IllegalTradeException` (`engine/src/exception/IllegalTradeException.java`)
 - **What it is:** Thrown when a requested trade breaks a trading rule: an invalid option
-  number, a non-positive share quantity, or trading on an event that's already closed.
+  number, a non-positive share quantity, a share quantity large enough to overflow the LMSR
+  math, or trading on an event that's already closed.
 - **Why it exists:** Separates "this trade request itself is invalid" from "the event
   doesn't exist" or "no file is loaded at all," so `ui` can tell the user exactly what was
   wrong with their input. This is also the resolved category for "closed event" specifically
@@ -454,8 +463,10 @@ the intentionally top-level, `ui`-facing packages.
 - **What it connects to:** Declared on `IEngine.participateInEvent` and `IEngine.closeEvent`.
   Thrown by `EngineImpl.findActiveEvent()` (event exists but isn't `ACTIVE`) and by
   `engine.impl.trading.TradeExecutor` (`validateOptionNumber()` for a bad option number;
-  directly for a non-positive share quantity). Caught by `ui.Main`'s Commands 4/5, which print
-  the message and return to the main menu rather than retrying the command.
+  directly for a non-positive share quantity, and directly for a share quantity that would push
+  the resulting `shares / liquidityParameter` past `MAX_SAFE_SHARES_OVER_LIQUIDITY`). Caught by
+  `ui.Main`'s Commands 4/5, which print the message and return to the main menu rather than
+  retrying the command.
 
 #### `InvalidCommandStateException` (`engine/src/exception/InvalidCommandStateException.java`)
 - **What it is:** Thrown when a command that requires loaded event data is invoked before any

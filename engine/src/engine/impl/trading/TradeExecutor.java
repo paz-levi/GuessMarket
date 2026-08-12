@@ -15,6 +15,8 @@ public final class TradeExecutor {
 
     private static final int MIN_OPTION_NUMBER = 1;
     private static final int MAX_OPTION_NUMBER = 2;
+    // Comfortably under Math.exp's ~709.78 overflow point, so the LMSR math never silently produces Infinity/NaN.
+    private static final double MAX_SAFE_SHARES_OVER_LIQUIDITY = 700.0;
 
     private TradeExecutor() {
     }
@@ -28,6 +30,11 @@ public final class TradeExecutor {
 
         EventOption chosenOption = event.getOption(optionNumber);
         EventOption otherOption = event.getOtherOption(optionNumber);
+        double sharesAfterPurchase = chosenOption.getSharesOutstanding() + shareQuantity;
+        if (sharesAfterPurchase / event.getLiquidityParameter() > MAX_SAFE_SHARES_OVER_LIQUIDITY) {
+            throw new IllegalTradeException("Purchase quantity too large for this event's liquidity parameter (b="
+                    + event.getLiquidityParameter() + "): numeric limits would be exceeded. Try a smaller quantity.");
+        }
         double cost = LmsrMath.purchaseCost(chosenOption.getSharesOutstanding(), otherOption.getSharesOutstanding(),
                 event.getLiquidityParameter(), shareQuantity);
         double commissionAmount = event.getCommissionMode() == CommissionMode.ON_PURCHASE

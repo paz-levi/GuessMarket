@@ -80,6 +80,33 @@ class TradeExecutorTest {
         assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, -5));
     }
 
+    // The exact case found during the Day 7 integration pass: 100,000 shares against b=100 (q/b=1000) used to silently
+    // produce Infinity/NaN. Now rejected cleanly, with zero state mutated -- same fail-before-mutate guarantee as a non-positive quantity.
+    @Test
+    void rejectsShareQuantityThatWouldOverflowLmsrMath() {
+        Event event = newEvent(50, CommissionMode.ON_PURCHASE);
+
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, 100_000));
+
+        assertEquals(0, event.getOptionOne().getSharesOutstanding(), DELTA);
+        assertEquals(0, event.getOptionTwo().getSharesOutstanding(), DELTA);
+        assertEquals(0.0, event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(0.0, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+        assertTrue(event.getTradeHistory().isEmpty());
+    }
+
+    // A large but legitimate purchase, just under the overflow guard's threshold (q/b=699.99 against b=100), still succeeds with finite numbers.
+    @Test
+    void allowsShareQuantityJustUnderTheOverflowGuard() {
+        Event event = newEvent(50, CommissionMode.ON_PURCHASE);
+
+        Trade trade = TradeExecutor.participate(event, 1, 69_999);
+
+        assertTrue(Double.isFinite(trade.getTotalPaid()));
+        assertTrue(Double.isFinite(trade.getPricePerShare()));
+        assertEquals(69_999, event.getOptionOne().getSharesOutstanding(), DELTA);
+    }
+
     // ON_CLOSE: commission is deducted from the winning payout at close time and added to the running commission counter.
     @Test
     void onCloseCommissionIsDeductedFromPayoutAtCloseTime() {
