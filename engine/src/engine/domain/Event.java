@@ -19,8 +19,10 @@ public final class Event {
     // The LMSR spec's "b" (liquidity parameter): fixed at load time, drives price/subsidy math in later commands.
     private final int liquidityParameter;
     private final MarketMakerAccount marketMakerAccount;
-    private final EventStatus status;
+    private EventStatus status;
     private final List<Trade> tradeHistory;
+    // The option declared as the winner when this event is closed; null while ACTIVE.
+    private EventOption winningOption;
 
     public Event(int id, String name, String description, EventOption optionOne, EventOption optionTwo,
                  int commissionRate, CommissionMode commissionMode, int liquidityParameter,
@@ -76,6 +78,16 @@ public final class Event {
 
     public EventStatus getStatus() {
         return status;
+    }
+
+    public EventOption getWinningOption() {
+        return winningOption;
+    }
+
+    // Marks this event CLOSED with the given winning option — the only way status ever changes after construction.
+    public void close(EventOption winningOption) {
+        this.status = EventStatus.CLOSED;
+        this.winningOption = winningOption;
     }
 
     // Returns the trade history as a read-only view so callers can never mutate engine state through it.

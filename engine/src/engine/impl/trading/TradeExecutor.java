@@ -45,6 +45,22 @@ public final class TradeExecutor {
         return trade;
     }
 
+    // Closes an ACTIVE event: validates the winning option, pays out winners, settles commission, and marks the event closed.
+    public static void close(Event event, int winningOptionNumber) {
+        validateOptionNumber(event, winningOptionNumber);
+        EventOption winningOption = event.getOption(winningOptionNumber);
+        double payoutOwed = winningOption.getSharesOutstanding();
+
+        double commissionAmount = 0.0;
+        if (event.getCommissionMode() == CommissionMode.ON_CLOSE) {
+            commissionAmount = payoutOwed * event.getCommissionRate() / 100.0;
+            event.getMarketMakerAccount().addCommissionCollected(commissionAmount);
+        }
+        // Under ON_PURCHASE, commissionAmount stays 0 here (already collected per-trade) so the full payout is debited.
+        event.getMarketMakerAccount().debit(payoutOwed - commissionAmount);
+        event.close(winningOption);
+    }
+
     // Shared by participate and close — the chosen/winning option number must be 1 or 2.
     private static void validateOptionNumber(Event event, int optionNumber) {
         if (optionNumber < MIN_OPTION_NUMBER || optionNumber > MAX_OPTION_NUMBER) {

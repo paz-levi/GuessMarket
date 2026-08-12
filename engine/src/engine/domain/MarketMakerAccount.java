@@ -28,4 +28,9 @@ public final class MarketMakerAccount {
     public void addCommissionCollected(double amount) {
         totalCommissionCollected += amount;
     }
+
+    // Decreases the balance by amount — money paid out (a close-event payout). Never clamped: the balance can legitimately go negative.
+    public void debit(double amount) {
+        balance -= amount;
+    }
 }

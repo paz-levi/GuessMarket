@@ -2,6 +2,7 @@ package engine.impl.trading;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -77,6 +78,58 @@ class TradeExecutorTest {
         Event event = newEvent(10, CommissionMode.ON_PURCHASE);
         assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, 0));
         assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, -5));
+    }
+
+    // ON_CLOSE: commission is deducted from the winning payout at close time and added to the running commission counter.
+    @Test
+    void onCloseCommissionIsDeductedFromPayoutAtCloseTime() {
+        Event event = newEvent(20, CommissionMode.ON_CLOSE);
+        TradeExecutor.participate(event, 1, 30);
+        double balanceAfterPurchase = event.getMarketMakerAccount().getBalance();
+
+        TradeExecutor.close(event, 1);
+
+        double expectedCommission = 30 * 0.20;
+        double expectedDebit = 30 - expectedCommission;
+        assertEquals(expectedCommission, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+        assertEquals(balanceAfterPurchase - expectedDebit, event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(EventStatus.CLOSED, event.getStatus());
+        assertEquals("Yes", event.getWinningOption().getName());
+    }
+
+    // ON_PURCHASE: commission was already collected per-trade, so close debits the full payout with no additional commission.
+    @Test
+    void onPurchaseFullPayoutIsDebitedAtCloseWithNoAdditionalCommission() {
+        Event event = newEvent(15, CommissionMode.ON_PURCHASE);
+        TradeExecutor.participate(event, 2, 40);
+        double commissionAfterPurchase = event.getMarketMakerAccount().getTotalCommissionCollected();
+        double balanceAfterPurchase = event.getMarketMakerAccount().getBalance();
+
+        TradeExecutor.close(event, 2);
+
+        assertEquals(commissionAfterPurchase, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+        assertEquals(balanceAfterPurchase - 40, event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals("No", event.getWinningOption().getName());
+    }
+
+    // The MM account balance is never clamped at 0 — it can legitimately go negative (the MM subsidizing the event's payout).
+    @Test
+    void balanceCanGoNegativeAndIsNotClamped() {
+        Event event = newEvent(0, CommissionMode.ON_PURCHASE);
+        TradeExecutor.participate(event, 1, 10);
+        double balanceAfterPurchase = event.getMarketMakerAccount().getBalance();
+
+        TradeExecutor.close(event, 1);
+
+        assertEquals(balanceAfterPurchase - 10, event.getMarketMakerAccount().getBalance(), DELTA);
+        assertTrue(event.getMarketMakerAccount().getBalance() < 0);
+    }
+
+    @Test
+    void rejectsWinningOptionNumberOutsideOneOrTwo() {
+        Event event = newEvent(10, CommissionMode.ON_PURCHASE);
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.close(event, 0));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.close(event, 5));
     }
 
     private static Event newEvent(int commissionRate, CommissionMode commissionMode) {

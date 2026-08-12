@@ -71,11 +71,13 @@ public class EngineImpl implements IEngine {
         return toTradeConfirmationDto(event, trade);
     }
 
-    // Not implemented yet.
+    // Declares the winning option, settles payouts and commission, marks the event CLOSED, and returns its final status.
     @Override
     public EventStatusDto closeEvent(int eventId, int winningOptionNumber)
             throws EventNotFoundException, IllegalTradeException, InvalidCommandStateException {
-        throw new UnsupportedOperationException("Not implemented yet");
+        Event event = findActiveEvent(eventId);
+        TradeExecutor.close(event, winningOptionNumber);
+        return toStatusDto(event);
     }
 
     // Looks up an event by id; throws InvalidCommandStateException if no file has ever been loaded, else EventNotFoundException if the id is unknown.
@@ -107,6 +109,7 @@ public class EngineImpl implements IEngine {
         double priceOne = LmsrMath.price(optionOne.getSharesOutstanding(), optionTwo.getSharesOutstanding(), liquidityParameter);
         double priceTwo = LmsrMath.price(optionTwo.getSharesOutstanding(), optionOne.getSharesOutstanding(), liquidityParameter);
         MarketMakerAccount account = event.getMarketMakerAccount();
+        EventOption winningOption = event.getWinningOption();
 
         return new EventStatusDto(
                 event.getId(), event.getName(), event.getStatus(),
@@ -114,7 +117,7 @@ public class EngineImpl implements IEngine {
                 priceOne, priceTwo,
                 optionOne.getSharesOutstanding(), optionTwo.getSharesOutstanding(),
                 account.getBalance(), account.getTotalCommissionCollected(),
-                null,
+                winningOption != null ? winningOption.getName() : null,
                 toTradeRecordDtosNewestFirst(event));
     }
 
