@@ -2,6 +2,8 @@
 
 > Source: official exercise spec, Appendix C, Exercise 1 portion only.
 > Excludes: Exercise 2 and Exercise 3 schema additions — not relevant yet.
+> **v2 correction applied:** the commission element name was spelled "comision" in spec v1.1 —
+> fixed to "commission" here, matching v2. This is the real XML tag name to parse for.
 
 ---
 
@@ -13,16 +15,16 @@
 
 בחנו היטיב את קבצי הדוגמא שהועלו למע' ה Mama וודאו כי אתם מבינים את פרטיהם ומבניהם.
 
-היכן שמצויין במפורש case **in**sensitive הכוונה היא שאין חשיבות ל case של האותיות באנגלית. 
+היכן שמצויין במפורש case **in**sensitive הכוונה היא שאין חשיבות ל case של האותיות באנגלית.
 במקרה זה הערך milk זהה לערך MiLk
 בכל מקרה אחר הנחת היסוד היא כי יש חשיבות ל case של האותיות (כלומר case sensitive). במקרים אלה הערך milk שונה מהערך MiLk.
 
-היכן שמצויין שהמחרוזת יכולה להכיל רווחים – המדובר הוא רק על רווחים בתוך המחרוזת. 
+היכן שמצויין שהמחרוזת יכולה להכיל רווחים – המדובר הוא רק על רווחים בתוך המחרוזת.
 אם מופיעים רווחים בתחילתה/סופה  יש להתעלם מהם (רמז: המטודה trim() על המחלקה String)
 
 כברירת מחדל כל ה element'ים הם mandatory, אלא אם מצויין במפורש כי הם אופציונלים.
 
- מבנה המע' מאוגד תחת האלמנט** ****Guess Market**: 
+מבנה המע' מאוגד תחת האלמנט** ****Guess Market**:
 
 | # | סוג | שם | מהות |
 | --- | --- | --- | --- |
@@ -37,11 +39,10 @@
 | 2 | Attribute | name | מתאר את שם האירוע. מחרוזת תווים רגילה. |
 | 3 | Element | id | מתאר את מספרו הסידורי של האירוע. מספר שלם חופשי |
 | 4 | Element | description | תיאור חופשי של האירוע ותנאי הסיום שלו. מחרוזת תווים רגילה. |
-| 5 | Element | comision | מתאר את העמלה עבור האירוע. מספר שלם המתאר אחוז. בין 0 ל 90 |
+| 5 | Element | commission | מתאר את העמלה עבור האירוע. מספר שלם המתאר אחוז. בין 0 ל 90 |
 | 6 | Attribute | type | מתאר את סוג העמלה. יכול להכיל אחד משני הערכים: on-close – העמלה נגבית בתום האירוע on-purchase – העמלה נגבית עבור כל מהלך קנייה, מהקונים בלבד. |
 | 7 | Element | GM-options | מכיל את האפשרויות השונות של האירוע |
 | 8 | Element | GM-option | מתאר אפשרות בודדת. מחרוזת תווים רגילה |
 | 9 | Element | GM-method | מתאר את שיטת המסחר באירוע |
 | 10 | Element | GM-LMSR | מתאר את מאפייני השיטה : LMSR (השיטה היחידה המאופשרת בתרגיל 1) |
 | 11 | Element | b | מתאר את מדד נזילות האירוע. מספר שלם חיובי |
-

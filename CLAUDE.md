@@ -3,8 +3,9 @@
 # Target: Build a rock-solid, extensible foundation for a multi-exercise trading-simulator project.
 
 ## Source of Truth
-This file is a curated summary of the official exercise spec, not the spec itself. It may not
-cover every detail. Before guessing at any ambiguous behavior, check these scoped reference
+This file is a curated summary of the official exercise spec (**currently synced to spec v2**,
+updated from the lecturer's forum clarifications — see Section 8), not the spec itself. It may
+not cover every detail. Before guessing at any ambiguous behavior, check these scoped reference
 files (Exercise 1 only — deliberately excludes Exercises 2-4 and Order Book, to avoid
 over-engineering ahead of scope):
 - `docs-reference/exercise1-requirements.md` — general system overview + full Ex1 requirements
@@ -34,6 +35,11 @@ decision made here has downstream cost in Exercises 2 and 3. Weigh decisions acc
 - **Language:** Java 25, strictly. Nothing compiles or runs on anything else.
 - **Build system:** IntelliJ multi-module project (Maven/Gradle acceptable for dependency
   management) — must compile to **separate JARs per module**.
+- **Packaging (confirmed by lecturer):** one independent JAR per module (`engine`, `ui`) —
+  **no fat/uber JAR**, even though that's the more common real-world approach. Third-party
+  library JARs you depend on (JAXB) must be included/referenced correctly (manifest classpath
+  or run command) so the shipped JARs run standalone. **Build and test the actual JARs early**
+  — don't leave first-time packaging for the last day; it rarely works cleanly on the first try.
 - **Runtime environment:** The final deliverable runs from `cmd` on Windows 10, with **no IDE
   present**. Ship runnable JAR(s) + a `.bat` file with the correct `java -jar` invocation.
   Never assume IntelliJ, VS Code, or any IDE is available at grading time.
@@ -63,7 +69,9 @@ and `exception` as clearly isolated packages inside `engine`:
 
 ### Module A — `engine` (Passive Core)
 - Owns all business logic, core domain entities (`Event`, `Account`, `MarketMaker`, trade
-  history, etc.) and the LMSR math.
+  history, etc.) and the LMSR math. **Domain classes live in a nested `engine.domain` package**
+  (mirroring `engine.impl`) — deliberately *not* at the top level like `dto`/`exception`, so the
+  naming itself signals "internal, `ui`-inaccessible" as opposed to "shared boundary contract."
 - **100% passive.** It never initiates I/O and never knows *who* is calling it — in Ex1 that's
   the console `ui`, in Ex3 it'll be an HTTP layer, and the engine's code must not care.
 - **Hard rule:** zero `System.out`, `System.err`, `Scanner`, or any UI-related import anywhere
@@ -82,6 +90,13 @@ and `exception` as clearly isolated packages inside `engine`:
 - Responsible for defensive parsing: if a number is expected and the user types text, `ui`
   must catch that, print a clear message, and re-prompt — never crash, never propagate a raw
   `NumberFormatException` to the user.
+- **`ui` may do trivial, cheap sanity checks as a UX nicety** (e.g. does the typed path end in
+  `.xml`; is the selected menu number within the range of options currently on screen) — but
+  this never reduces what `engine` must independently validate. `engine` can never trust that
+  `ui` checked anything; every rule in Section 4 is re-verified inside `engine` regardless of
+  what `ui` already caught. The dividing line (per the lecturer): real business-logic validation
+  (file structure, XML semantics, trade legality) belongs entirely to `engine` — `ui` only ever
+  helps with the cheapest, most obvious input-collection checks, never as a substitute.
 - Catches every custom exception the engine can throw and renders a clean, specific English
   message. The application terminates **only** via the explicit Exit command — never via an
   unhandled exception.
@@ -103,6 +118,17 @@ and `exception` as clearly isolated packages inside `engine`:
   (`Event`, `Account`, …) to `ui`. Every cross-boundary return value is mapped to an immutable
   DTO first. The fact that `dto` physically sits inside `engine` does not relax this rule —
   it's enforced by discipline (code review / self-check), not by the module boundary.
+- **DTO conversion must be deep, not just top-level (explicit lecturer guidance).** If a DTO
+  contains a nested collection or object (e.g. an event's trade history), those nested items
+  must also be DTOs — never a domain object hiding one level down inside an otherwise-safe DTO.
+  A DTO that exposes even one internal domain object through it defeats the entire point:
+  external code could reach in and mutate engine state through it.
+- DTOs aren't only return values — they're also the right tool when an engine method would
+  otherwise need many (4-5+) parameters. Bundle those into a single request DTO instead of a
+  long parameter list. For Ex1's method signatures this is unlikely to come up (most calls take
+  2-3 args), but keep it in mind if one starts growing a long parameter list.
+- DTOs are cheap to create — build a fresh instance per call/response, don't try to cache or
+  reuse them. This isn't a performance-sensitive design (per the lecturer explicitly).
 - DTOs are `record`s or `final` classes: constructor + getters only, no setters, no mutable
   state, no behavior that mutates anything.
 
@@ -150,6 +176,11 @@ Captured here so nothing gets forgotten once implementation starts:
 - **Commission:** integer, inclusive range **0–90**. Two collection modes:
   - `on-purchase` — charged to the buyer, added on top of the stock price, paid immediately.
   - `on-close` — charged only to the winners, deducted from payout at event close.
+- **Closing an event (v2 clarification — important, was ambiguous before):** after commission
+  is collected and winners are paid out, **do not reset/zero the account balance.** Whatever
+  remains (or is missing) after that settlement stays as the account's balance going forward.
+  **The balance can legitimately be negative** — this represents the MM having paid out more
+  than it collected, i.e. the MM subsidizing the event's actual cost. Don't clamp it to zero.
 - Required commands (menu, 1-based selection throughout):
   1. Load XML events file
   2. List events
@@ -232,6 +263,11 @@ Group entries by module (`engine`, `ui`). Treat the file as **append-only** acro
 first time this section is followed, backfill entries for everything already built in Step 1
 (the skeleton) before adding anything new.
 
+**Also include a Mermaid diagram** (a ` ```mermaid ` code block, `classDiagram` or `flowchart`)
+near the top of `ARCHITECTURE.md`, showing modules/packages and how they connect. Update it each
+stage alongside the text entries — a diagram is scannable in a way a growing wall of text isn't,
+and both IntelliJ and GitHub render Mermaid blocks natively, no extra tooling needed.
+
 ### Micro — one-line comments on functions (what each piece does)
 
 Every non-trivial method (anything beyond a plain getter/setter) gets **one short comment line
@@ -242,8 +278,27 @@ line tells you what it does without reading the body.
 Example of the bar to hit — short, not elaborate:
 ```java
 // Computes the LMSR cost difference for buying shareQuantity shares of one option.
-//public double calculatePurchaseCost(Event event, EventOption option, int shareQuantity) { ... }
-//```
+public double calculatePurchaseCost(Event event, EventOption option, int shareQuantity) {
+    /* body */
+}
+```
 
 The first time this section is followed, backfill these one-line comments onto everything
 already built in Step 1 (the skeleton) as well.
+
+---
+
+## 8. Update Log
+
+**Spec v1.1 → v2** (diffed directly, only the changes relevant to Ex1 listed):
+- XML element `comision` → **`commission`** (spelling fix — this is the actual tag name the
+  parser must match; already corrected in `docs-reference/xml-schema-appendix.md`).
+- Event closing: account balance is not reset after payout, and may be negative (see Section 4).
+- LMSR trades execute against the event's own account, not peer-to-peer (see
+  `docs-reference/lmsr-appendix.md`).
+- "Money Maker" renamed to "Market Maker" in the spec — same MM abbreviation, no code impact.
+
+**Lecturer forum clarifications integrated** (interfaces philosophy, deep-DTO conversion, DTO as
+a multi-param request object, exception design confirmation, `ui`'s limited legitimate
+validation role, JAR packaging approach) — merged directly into the relevant sections above
+rather than kept separate, so there's one source per topic instead of two to reconcile.

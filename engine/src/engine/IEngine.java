@@ -10,8 +10,15 @@ import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
 import exception.XmlValidationException;
 
+import engine.impl.EngineImpl;
+
 // The one contract ui depends on; every engine capability is exposed through this interface, never a concrete class.
 public interface IEngine {
+
+    // Creates the default engine implementation without exposing its concrete type to callers.
+    static IEngine createDefault() {
+        return new EngineImpl();
+    }
 
     // Loads and validates an events XML file, fully replacing any previously loaded valid state.
     void loadEventsFile(String filePath) throws XmlValidationException;
