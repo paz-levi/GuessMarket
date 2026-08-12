@@ -146,8 +146,9 @@ the intentionally top-level, `ui`-facing packages.
 - **What it is:** An enum with two values, `ON_PURCHASE` and `ON_CLOSE`.
 - **Why it exists:** Represents which of the two commission-collection modes (Section 4)
   an event uses, instead of a loose `String` or `boolean`.
-- **What it connects to:** Stored as a field on `Event`. Will be read by the (not-yet-
-  written) trading and closing logic to decide when to charge commission.
+- **What it connects to:** Stored as a field on `Event`. Read by
+  `engine.impl.trading.TradeExecutor`'s `participate()`/`close()` to decide when commission is
+  charged.
 
 #### `EventOption` (`engine/src/engine/domain/EventOption.java`)
 - **What it is:** A small class holding a name and a running `sharesOutstanding` count — one
@@ -412,9 +413,10 @@ the intentionally top-level, `ui`-facing packages.
 - **Why it exists:** Gives `ui` one distinct, catchable category for "the file you gave me
   is bad," separate from trade or lookup failures, so it can render a specific message per
   CLAUDE.md's specificity requirement.
-- **What it connects to:** Declared on `IEngine.loadEventsFile(String)`. Will be thrown
-  internally by the engine's (not-yet-written) XML load/parse/validate pipeline, and
-  caught by `ui`'s "load XML events file" command (not yet written).
+- **What it connects to:** Declared on `IEngine.loadEventsFile(String)`. Thrown internally by
+  `engine.impl.xml.EventsFileLoader`'s parse/validate pipeline; caught by `ui.Main`'s Command 1
+  handler, which prints the message and never calls `engine` at all if its own cheap
+  `.xml`-extension check fails first.
 
 #### `EventNotFoundException` (`engine/src/exception/EventNotFoundException.java`)
 - **What it is:** Thrown when a caller refers to an event id that doesn't exist in the
@@ -425,8 +427,9 @@ the intentionally top-level, `ui`-facing packages.
   kinds of problems for `ui` to explain to the user.
 - **What it connects to:** Declared on `IEngine.getEventStatus`,
   `IEngine.participateInEvent`, and `IEngine.closeEvent`. Thrown by `EngineImpl.findEvent()`
-  when `events` is non-empty but doesn't contain the requested id; caught by `ui` (not yet
-  written).
+  when `events` is non-empty but doesn't contain the requested id; caught defensively by
+  `ui.Main`'s Commands 3–5 (in practice unreachable there, since `ui` only ever passes an id it
+  just displayed in a list, but the catch matches `IEngine`'s declared `throws` regardless).
 
 #### `IllegalTradeException` (`engine/src/exception/IllegalTradeException.java`)
 - **What it is:** Thrown when a requested trade breaks a trading rule: an invalid option
@@ -439,7 +442,8 @@ the intentionally top-level, `ui`-facing packages.
 - **What it connects to:** Declared on `IEngine.participateInEvent` and `IEngine.closeEvent`.
   Thrown by `EngineImpl.findActiveEvent()` (event exists but isn't `ACTIVE`) and by
   `engine.impl.trading.TradeExecutor` (`validateOptionNumber()` for a bad option number;
-  directly for a non-positive share quantity). Caught by `ui` (not yet written).
+  directly for a non-positive share quantity). Caught by `ui.Main`'s Commands 4/5, which print
+  the message and return to the main menu rather than retrying the command.
 
 #### `InvalidCommandStateException` (`engine/src/exception/InvalidCommandStateException.java`)
 - **What it is:** Thrown when a command that requires loaded event data is invoked before any
@@ -466,15 +470,13 @@ the intentionally top-level, `ui`-facing packages.
 - **What it is:** The application's entry point and the entire console UI — the only place in
   the project that imports `java.util.Scanner` or calls `System.out`. Runs the real 6-command
   menu loop: show menu → read a command number → dispatch to that command's own small handler
-  method → (loop) → repeat until Exit. Commands 1 (Load), 2 (List), 3 (Trading Status), 4
-  (Participate), and 6 (Exit) are fully real; only command 5 (`handleCloseEvent`) is still a
-  one-line `"Not implemented yet."` stub.
+  method → (loop) → repeat until Exit. All 6 commands are now fully real — this file is
+  Exercise 1's complete UI.
 - **Why it exists:** Every runnable Java program needs a `main` method, and per the module
   split (CLAUDE.md Section 2) this is the *only* place allowed to do I/O — `engine` never
-  imports `Scanner`/`System.out` anywhere, confirmed unchanged by this stage. The loop body
-  itself is intentionally thin (one `switch`, one line per case) — all the actual read/print
-  work lives in each command's own `handleX` method, per CLAUDE.md Section 5's no-god-methods
-  rule.
+  imports `Scanner`/`System.out` anywhere. The loop body itself is intentionally thin (one
+  `switch`, one line per case) — all the actual read/print work lives in each command's own
+  `handleX` method, per CLAUDE.md Section 5's no-god-methods rule.
 - **What it connects to:** Calls `IEngine.createDefault()` once, then repeatedly calls
   whichever of `loadEventsFile`/`listEvents`/`getEventStatus`/`participateInEvent`/`closeEvent`
   the selected command needs. Every menu item is always printed and always selectable — state
@@ -482,34 +484,44 @@ the intentionally top-level, `ui`-facing packages.
   engine's own specific exception and printing its message, never through hiding a menu entry.
   An outer `catch (GuessMarketException e)` around the whole dispatch is a safety net beyond
   each handler's own specific catches, so the loop truly can't crash on an engine exception —
-  only `case 6` (Exit) ever sets `running = false`. Shares several small helpers across
-  commands: `readInt`/`readIntInRange` (the only place integer parsing happens — every numeric
-  read, from the menu itself to event/option selection, retries through these rather than
-  risking a raw `NumberFormatException`), `printEventSummaries` (Command 2's display, reused as
-  the pre-selection list for commands 3–5 — Command 3 is its first such reuse), `selectEventId`
-  (prints a list via `printEventSummaries` and reads a validated 1-based selection, returning
-  `null` after printing a caller-supplied message if the list is empty — Command 3 passes it the
-  **full** `listEvents()` result, since ` docs-reference/exercise1-requirements.md:204` has no
-  "active-only" qualifier and `:225` requires Command 3 to still show a *closed* event's final
-  state; Command 4 is the first to pass it a filtered list, making the empty-list branch
-  reachable for the first time), `filterActiveEvents` (a one-line `Stream.filter` down to
-  `EventStatus.ACTIVE`, used by `handleParticipateInEvent` and, next commit,
-  `handleCloseEvent` — one shared implementation for a filter both commands need identically),
-  `selectOptionNumber` (prints the two option names as a 2-item list and reads a validated 1-2
-  choice, per `:237`'s "by number, never by typing the name" — takes its prompt text as a
-  parameter since Close will phrase the same question differently), `printEventStatus` (the
-  Command 3 view: both options' price/shares, account balance, total commission, the
-  winning-option line only when set, and trade history newest-first — reused unchanged by
-  `printTradeConfirmation` below, and will be again once Close returns its own `EventStatusDto`),
-  `printTradeConfirmation` (Command 4's confirmation: total paid and the shares-cost/commission
-  breakdown, then `printEventStatus(confirmation.eventStatus())` — zero duplicated rendering
-  logic, since `TradeConfirmationDto` already nests the exact `EventStatusDto` shape
-  `printEventStatus` expects), and `formatDecimal`/`formatStatus`/`formatCommissionMode` (small
-  presentation helpers — `formatDecimal` pins `Locale.US` explicitly so `%.2f` can't silently
-  print a comma on a non-English-default JVM; applied uniformly to share/quantity counts too,
-  not just price, since CLAUDE.md's 2-decimal rule states no exceptions). `handleParticipateInEvent`
-  itself reads event → option → share quantity as three independent, sequential prompts — each
-  underlying `readInt`/`readIntInRange` call only returns once its own input is valid, so a bad
-  entry at one step can never discard an already-resolved earlier one; no ui-side check on share
-  quantity being positive, since that's `engine`'s own business rule (`IllegalTradeException`)
-  like every other trading-rule check in this project.
+  only `case 6` (Exit) ever sets `running = false`.
+
+  Built from a small set of helpers shared across commands rather than each `handleX` method
+  duplicating its own read/print logic:
+  - `readInt`/`readIntInRange` — the only place integer parsing happens. Every numeric read in
+    this file (menu selection, event selection, option selection, share quantity) goes through
+    one of these, so a raw `NumberFormatException` can never reach the user.
+  - `printEventSummaries` — Command 2's per-event display block, reused as the pre-selection
+    list for commands 3–5 (all three cross-reference "per Command 2's details" in the spec).
+  - `selectEventId` — prints a list via `printEventSummaries` and reads a validated 1-based
+    selection, returning `null` (after a caller-supplied message) if the list is empty. Command 3
+    passes it the **full** `listEvents()` result (` docs-reference/exercise1-requirements.md:204`
+    has no "active-only" qualifier, and `:225` requires Command 3 to still show a *closed*
+    event's final state); commands 4 and 5 both pass it an `ACTIVE`-only filtered list instead,
+    which is where the empty-list branch actually triggers.
+  - `filterActiveEvents` — one-line `Stream.filter` to `EventStatus.ACTIVE`, shared identically
+    by `handleParticipateInEvent` and `handleCloseEvent` (`:234`, `:254`).
+  - `selectOptionNumber` — prints the two option names as a 2-item list and reads a validated
+    1-2 choice, per `:237`'s "by number, never by typing the name." Its `prompt` parameter is
+    what lets Participate ("Select an option by number") and Close ("Select the winning option
+    by number") ask two differently-worded questions through the same mechanism.
+  - `printEventStatus` — the Command 3 view: both options' price/shares, account balance, total
+    commission, the winning-option line only when set, and trade history newest-first. Reused
+    unchanged in four places: Command 3 directly, Command 4's pre-purchase preview and its
+    post-purchase confirmation (via `printTradeConfirmation`'s nested `EventStatusDto`), and
+    Command 5's pre-close preview *and* its final closing summary (`closeEvent` returns the same
+    `EventStatusDto` shape `getEventStatus` does, so no second renderer was ever needed there).
+  - `printTradeConfirmation` — Command 4's confirmation: total paid and the shares-cost/
+    commission breakdown, then delegates straight to `printEventStatus`.
+  - `formatDecimal`/`formatStatus`/`formatCommissionMode` — small presentation helpers.
+    `formatDecimal` pins `Locale.US` explicitly so `%.2f` can't silently print a comma on a
+    non-English-default JVM; applied uniformly to share/quantity counts too, not just price,
+    since CLAUDE.md's 2-decimal rule states no exceptions.
+
+  Both `handleParticipateInEvent` and `handleCloseEvent` read their multi-step input (event,
+  then option, then — for Participate only — share quantity) as independent sequential prompts:
+  each underlying `readInt`/`readIntInRange` call only returns once *its own* input is valid, so
+  a bad entry at a later step can never discard an already-resolved earlier one. Neither handler
+  pre-validates business rules `engine` already owns (a non-positive share quantity, an
+  out-of-range option number reaching `IllegalTradeException`) — `ui`'s only independent check
+  anywhere is Command 1's cheap `.xml`-extension sanity test.

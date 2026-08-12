@@ -143,9 +143,38 @@ public final class Main {
         }
     }
 
-    // Command 5: not implemented yet.
+    // Command 5: lets the MM declare a winning option for an ACTIVE event, settling payouts and commission, then prints the final summary.
     private static void handleCloseEvent(IEngine engine, Scanner scanner) {
-        System.out.println("Not implemented yet.");
+        List<EventSummaryDto> events;
+        try {
+            events = engine.listEvents();
+        } catch (InvalidCommandStateException e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+        Integer eventId = selectEventId(filterActiveEvents(events), scanner,
+                "There are no active events to close.");
+        if (eventId == null) {
+            return;
+        }
+
+        EventStatusDto statusBeforeClose;
+        try {
+            statusBeforeClose = engine.getEventStatus(eventId);
+        } catch (InvalidCommandStateException | EventNotFoundException e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+        printEventStatus(statusBeforeClose);
+
+        int winningOptionNumber = selectOptionNumber(statusBeforeClose.optionOneName(),
+                statusBeforeClose.optionTwoName(), scanner, "Select the winning option by number: ");
+
+        try {
+            printEventStatus(engine.closeEvent(eventId, winningOptionNumber));
+        } catch (InvalidCommandStateException | EventNotFoundException | IllegalTradeException e) {
+            System.out.println(e.getMessage());
+        }
     }
 
     // Prints one numbered block per event with every field Command 2 requires; reused as the pre-selection list for later commands.
