@@ -6,6 +6,12 @@ scannable in seconds.
 
 ---
 
+### `7102b04` — 2026-08-12 — Add PROGRESS_LOG.md and codify it as a standing doc habit
+Created this file, backfilled with one entry per prior commit. Extended CLAUDE.md Section 7
+("Macro + Micro" → "Macro + Micro + Log") with a rule: append an entry here after every future
+commit, automatically, without being asked — same standing-habit treatment as `ARCHITECTURE.md`
+and one-line method comments.
+
 ### `afcffd8` — 2026-08-12 — Implement console UI: menu loop, Load, List, Exit
 Replaced `ui.Main`'s temporary single-shot wiring with the real 6-command menu loop (show menu →
 read command → dispatch to a small handler → repeat until Exit). Commands 1 (Load), 2 (List), and
