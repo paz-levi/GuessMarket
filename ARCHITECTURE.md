@@ -353,7 +353,9 @@ the intentionally top-level, `ui`-facing packages.
   by `EngineImpl.toTradeRecordDto()` from a domain `Trade` every time one exists, ordered
   newest-first by `EngineImpl.toStatusDto()`. Its `pricePerShare` is the share cost alone
   (`Trade.pricePerShare`) — commission and total-paid stay available as separate fields,
-  matching the project's chosen meaning of "price paid" in trade-history display.
+  matching the project's chosen meaning of "price paid" in trade-history display. Printed by
+  `ui.Main.printEventStatus()` as one row per trade, or `"No trades yet."` when the list is
+  empty.
 
 #### `EventStatusDto` (`engine/src/dto/EventStatusDto.java`)
 - **What it is:** A record bundling everything the "event trading status" screen needs in
@@ -370,7 +372,9 @@ the intentionally top-level, `ui`-facing packages.
 - **What it connects to:** Returned by `IEngine.getEventStatus(int)`, embedded in
   `TradeConfirmationDto.eventStatus`, and by `IEngine.closeEvent(int, int)`. Built exclusively
   by `EngineImpl.toStatusDto()` — the one place this shape gets assembled, reused rather than
-  re-derived at each call site. Its `tradeHistory` field is a `List<TradeRecordDto>`.
+  re-derived at each call site. Its `tradeHistory` field is a `List<TradeRecordDto>`. Printed in
+  full by `ui.Main.printEventStatus()` — Command 3's display, first wired this stage, reused
+  as-is once Participate/Close hand it the same shape.
 
 #### `TradeConfirmationDto` (`engine/src/dto/TradeConfirmationDto.java`)
 - **What it is:** A record summarizing the outcome of one successful trade: which option was
@@ -461,9 +465,9 @@ the intentionally top-level, `ui`-facing packages.
 - **What it is:** The application's entry point and the entire console UI — the only place in
   the project that imports `java.util.Scanner` or calls `System.out`. Runs the real 6-command
   menu loop: show menu → read a command number → dispatch to that command's own small handler
-  method → (loop) → repeat until Exit. Commands 1 (Load), 2 (List), and 6 (Exit) are fully
-  real; commands 3–5 (`handleEventTradingStatus`/`handleParticipateInEvent`/`handleCloseEvent`)
-  are still one-line `"Not implemented yet."` stubs, filled in over the next few commits.
+  method → (loop) → repeat until Exit. Commands 1 (Load), 2 (List), 3 (Trading Status), and 6
+  (Exit) are fully real; commands 4–5 (`handleParticipateInEvent`/`handleCloseEvent`) are still
+  one-line `"Not implemented yet."` stubs, filled in over the next couple of commits.
 - **Why it exists:** Every runnable Java program needs a `main` method, and per the module
   split (CLAUDE.md Section 2) this is the *only* place allowed to do I/O — `engine` never
   imports `Scanner`/`System.out` anywhere, confirmed unchanged by this stage. The loop body
@@ -479,8 +483,18 @@ the intentionally top-level, `ui`-facing packages.
   each handler's own specific catches, so the loop truly can't crash on an engine exception —
   only `case 6` (Exit) ever sets `running = false`. Shares several small helpers across
   commands: `readInt`/`readIntInRange` (the only place integer parsing happens — every numeric
-  read, from the menu itself to a future event/option selection, retries through these rather
-  than risking a raw `NumberFormatException`), `printEventSummaries` (Command 2's display,
-  reused as the pre-selection list once commands 3–5 are real), and `formatDecimal`/
-  `formatStatus`/`formatCommissionMode` (small presentation helpers — `formatDecimal` pins
-  `Locale.US` explicitly so `%.2f` can't silently print a comma on a non-English-default JVM).
+  read, from the menu itself to event/option selection, retries through these rather than
+  risking a raw `NumberFormatException`), `printEventSummaries` (Command 2's display, reused as
+  the pre-selection list for commands 3–5 — Command 3 is its first such reuse), `selectEventId`
+  (prints a list via `printEventSummaries` and reads a validated 1-based selection, returning
+  `null` after printing a caller-supplied message if the list is empty — Command 3 passes it the
+  **full** `listEvents()` result, since ` docs-reference/exercise1-requirements.md:204` has no
+  "active-only" qualifier and `:225` requires Command 3 to still show a *closed* event's final
+  state; commands 4/5 will pass it a client-side `ACTIVE`-only filtered list instead, which is
+  the case where the empty-list branch actually triggers), `printEventStatus` (the Command 3
+  view: both options' price/shares, account balance, total commission, the winning-option line
+  only when set, and trade history newest-first — also reused once Participate/Close return an
+  `EventStatusDto` of their own), and `formatDecimal`/`formatStatus`/`formatCommissionMode`
+  (small presentation helpers — `formatDecimal` pins `Locale.US` explicitly so `%.2f` can't
+  silently print a comma on a non-English-default JVM; applied uniformly to share/quantity
+  counts too, not just price, since CLAUDE.md's 2-decimal rule states no exceptions).

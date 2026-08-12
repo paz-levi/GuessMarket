@@ -6,8 +6,11 @@ import java.util.Scanner;
 
 import dto.CommissionMode;
 import dto.EventStatus;
+import dto.EventStatusDto;
 import dto.EventSummaryDto;
+import dto.TradeRecordDto;
 import engine.IEngine;
+import exception.EventNotFoundException;
 import exception.GuessMarketException;
 import exception.InvalidCommandStateException;
 import exception.XmlValidationException;
@@ -83,9 +86,24 @@ public final class Main {
         }
     }
 
-    // Command 3: not implemented yet.
+    // Command 3: shows every currently loaded event (any status), lets the user pick one by number, then prints its full trading status.
     private static void handleEventTradingStatus(IEngine engine, Scanner scanner) {
-        System.out.println("Not implemented yet.");
+        List<EventSummaryDto> events;
+        try {
+            events = engine.listEvents();
+        } catch (InvalidCommandStateException e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+        Integer eventId = selectEventId(events, scanner, "There are no events to show.");
+        if (eventId == null) {
+            return;
+        }
+        try {
+            printEventStatus(engine.getEventStatus(eventId));
+        } catch (InvalidCommandStateException | EventNotFoundException e) {
+            System.out.println(e.getMessage());
+        }
     }
 
     // Command 4: not implemented yet.
@@ -107,6 +125,42 @@ public final class Main {
             System.out.println("   Commission: " + event.commissionRate() + "% (" + formatCommissionMode(event.commissionMode()) + ")");
             System.out.println("   Options: " + event.optionOneName() + " / " + event.optionTwoName());
             System.out.println("   Status: " + formatStatus(event.status()));
+        }
+    }
+
+    // Prints events via printEventSummaries and reads a 1-based selection; returns the chosen eventId, or null (after printing emptyMessage) if the list is empty.
+    private static Integer selectEventId(List<EventSummaryDto> events, Scanner scanner, String emptyMessage) {
+        if (events.isEmpty()) {
+            System.out.println(emptyMessage);
+            return null;
+        }
+        printEventSummaries(events);
+        int choice = readIntInRange(scanner, "Select an event by number: ", 1, events.size());
+        return events.get(choice - 1).eventId();
+    }
+
+    // Prints the full "event trading status" view: both options' price/shares, account state, total commission, the winning option (if closed), and trade history newest-first.
+    private static void printEventStatus(EventStatusDto status) {
+        System.out.println();
+        System.out.println("Event: " + status.eventName() + " (id " + status.eventId() + ") - " + formatStatus(status.status()));
+        System.out.println("Current prices:");
+        System.out.println("1. " + status.optionOneName() + ": " + formatDecimal(status.optionOnePrice())
+                + " (" + formatDecimal(status.optionOneShares()) + " shares bought)");
+        System.out.println("2. " + status.optionTwoName() + ": " + formatDecimal(status.optionTwoPrice())
+                + " (" + formatDecimal(status.optionTwoShares()) + " shares bought)");
+        System.out.println("Market Maker account balance: " + formatDecimal(status.marketMakerBalance()));
+        System.out.println("Total commission collected: " + formatDecimal(status.totalCommissionCollected()));
+        if (status.winningOptionName() != null) {
+            System.out.println("Winning option: " + status.winningOptionName());
+        }
+        System.out.println("Trade history (newest first):");
+        if (status.tradeHistory().isEmpty()) {
+            System.out.println("No trades yet.");
+        } else {
+            for (TradeRecordDto trade : status.tradeHistory()) {
+                System.out.println("- " + trade.optionName() + ": " + formatDecimal(trade.quantity())
+                        + " shares at " + formatDecimal(trade.pricePerShare()) + " each");
+            }
         }
     }
 
