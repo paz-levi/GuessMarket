@@ -6,6 +6,15 @@ scannable in seconds.
 
 ---
 
+### `0c490a6` — 2026-08-12 — Fix: reject XML files with zero GM-event elements
+Found via a Day 7 integration pass driving every `test_files/` file through the packaged
+`dist/ui.jar` interactively. `extractEvents()`'s unscoped `getElementsByTagName("GM-event")`
+silently returned an empty list for a structurally-unrelated well-formed XML file (the reference
+schema itself), producing a misleading "success" that `listEvents()` then couldn't distinguish
+from "nothing loaded." Fixed with an explicit zero-length check; added
+`test_files/error-7-no-events.xml` as the on-spec regression case. All 10 previously-passing
+files unaffected.
+
 ### `970dd0e` — 2026-08-12 — Implement UI Command 5: Close an event (final UI-phase command)
 Wired `handleCloseEvent` using **zero new shared helpers** — pure composition of
 `filterActiveEvents`, `selectEventId`, `printEventStatus`, and `selectOptionNumber`, all already
