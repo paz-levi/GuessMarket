@@ -6,6 +6,14 @@ scannable in seconds.
 
 ---
 
+### `970dd0e` — 2026-08-12 — Implement UI Command 5: Close an event (final UI-phase command)
+Wired `handleCloseEvent` using **zero new shared helpers** — pure composition of
+`filterActiveEvents`, `selectEventId`, `printEventStatus`, and `selectOptionNumber`, all already
+built for commits 3/4. `closeEvent()` returns the same `EventStatusDto` shape `getEventStatus()`
+does, so the final summary reuses `printEventStatus` unchanged — no second renderer. Also did a
+cleanup pass on `ARCHITECTURE.md`, settling several stale "not yet written" notes left over from
+before commands 3–5 were real. **All 6 commands are now real — Exercise 1's UI phase is complete.**
+
 ### `5fe8097` — 2026-08-12 — Implement UI Command 4: Participate in an event
 Wired `handleParticipateInEvent`: `listEvents()` → `selectEventId` over a new
 `filterActiveEvents`-filtered list (`ACTIVE`-only, per line 234; first time the empty-list branch
