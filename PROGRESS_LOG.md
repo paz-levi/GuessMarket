@@ -6,6 +6,13 @@ scannable in seconds.
 
 ---
 
+### `bff6626` — 2026-08-12 — Improve console output readability (formatting only)
+Added `SEPARATOR`/`INDENT` constants; the main loop now wraps every command's output in a
+separator line uniformly (no per-handler changes needed), and nested list content
+(`printEventSummaries`, `printEventStatus`) uses `INDENT` consistently instead of hand-typed
+spaces. Zero engine changes, zero data/precision changes — verified every 2-decimal value is
+byte-identical to before across all 6 commands.
+
 ### `0c490a6` — 2026-08-12 — Fix: reject XML files with zero GM-event elements
 Found via a Day 7 integration pass driving every `test_files/` file through the packaged
 `dist/ui.jar` interactively. `extractEvents()`'s unscoped `getElementsByTagName("GM-event")`
