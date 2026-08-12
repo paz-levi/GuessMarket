@@ -258,11 +258,23 @@ the intentionally top-level, `ui`-facing packages.
   plain multi-module IntelliJ project with no Maven/Gradle.
 - **What it connects to:** Called by `EngineImpl.loadEventsFile()`. Its `load()` entry point
   returns `List<Event>` on success or throws `exception.XmlValidationException` with a
-  specific message per violation (bad path/extension, missing file, duplicate id,
-  commission out of `[0,90]`, wrong `GM-option` count). On success it also computes each
-  event's initial LMSR subsidy (`b · ln(2)`, per `docs-reference/lmsr-appendix.md`'s worked
-  example) and constructs each event's `MarketMakerAccount` with that as its starting
-  balance.
+  specific message per violation (bad path/extension, missing file, **zero `GM-event`
+  elements anywhere in the document**, duplicate id, commission out of `[0,90]`, wrong
+  `GM-option` count). On success it also computes each event's initial LMSR subsidy
+  (`b · ln(2)`, per `docs-reference/lmsr-appendix.md`'s worked example) and constructs each
+  event's `MarketMakerAccount` with that as its starting balance.
+  - **Bug found and fixed during the Day 7 integration pass:** `extractEvents()` originally
+    used `document.getElementsByTagName("GM-event")` with no check that it found anything —
+    `getElementsByTagName` searches the whole document tree unscoped by root element, so a
+    well-formed XML file with the *wrong* structure entirely (e.g. the reference XSD schema
+    itself, root `<xs:schema>`, no `GM-event` anywhere) silently produced an **empty**
+    `List<Event>` instead of an error. `EngineImpl.loadEventsFile` then "succeeded" at loading
+    zero events, and the very next `listEvents()` call reported "no file loaded" — a
+    misleading, silently-broken success rather than a clear rejection. Fixed with one check
+    (`eventNodes.getLength() == 0` → throw `XmlValidationException`) before the extraction
+    loop. Covered by `test_files/error-7-no-events.xml` (well-formed `Guess-Market` root, empty
+    `GM-events` wrapper) as the on-spec regression case, in addition to the schema file itself
+    as the edge case that originally surfaced it.
 
 ### `engine.impl.trading` package
 

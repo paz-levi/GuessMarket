@@ -88,6 +88,9 @@ public final class EventsFileLoader {
     // Walks every GM-event in document order, validating and building each one; stops at the first violation found.
     private static List<Event> extractEvents(Document document) {
         NodeList eventNodes = document.getElementsByTagName(TAG_GM_EVENT);
+        if (eventNodes.getLength() == 0) {
+            throw new XmlValidationException("The file does not contain any GM-event elements.");
+        }
         List<Event> events = new ArrayList<>();
         Set<Integer> seenIds = new HashSet<>();
         for (int i = 0; i < eventNodes.getLength(); i++) {
