@@ -6,6 +6,12 @@ scannable in seconds.
 
 ---
 
+### `25236ad` — 2026-08-12 — Implement UI Command 3: Event trading status
+Wired `handleEventTradingStatus` for real: `listEvents()` → `selectEventId` over the **full**
+event list (any status) → `getEventStatus()` → new `printEventStatus()` helper. Confirmed with
+the user first that Command 3 must show the full list, not active-only — line 225 requires it to
+still display a closed event's final state, which an active-only filter would have broken.
+
 ### `7102b04` — 2026-08-12 — Add PROGRESS_LOG.md and codify it as a standing doc habit
 Created this file, backfilled with one entry per prior commit. Extended CLAUDE.md Section 7
 ("Macro + Micro" → "Macro + Micro + Log") with a rule: append an entry here after every future
