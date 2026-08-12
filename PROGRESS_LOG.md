@@ -6,6 +6,17 @@ scannable in seconds.
 
 ---
 
+### `b848db6` — 2026-08-12 — Guard TradeExecutor.participate() against LMSR numeric overflow
+Closes the previously-reported gap: a share quantity pushing `shares/b` past `Math.exp`'s
+~709.78 overflow point silently produced `Infinity`/`NaN` throughout the purchase confirmation
+and status instead of a clean rejection. Added a pre-mutation check (threshold 700) in
+`participate()`, rejecting via `IllegalTradeException` before any state changes. Two new
+`TradeExecutorTest` cases: the exact 100,000-share/b=100 bug case (now rejected, zero mutation)
+and a just-under-threshold case confirming legitimate large purchases still work. Also caught and
+fixed an em-dash in the new message that rendered as mojibake in a terminal — the first
+non-ASCII character ever in a runtime message string in this codebase, a real risk given
+CLAUDE.md's plain-`cmd`-on-Windows runtime requirement.
+
 ### `bff6626` — 2026-08-12 — Improve console output readability (formatting only)
 Added `SEPARATOR`/`INDENT` constants; the main loop now wraps every command's output in a
 separator line uniformly (no per-handler changes needed), and nested list content
