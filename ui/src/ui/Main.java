@@ -21,6 +21,8 @@ import exception.XmlValidationException;
 public final class Main {
 
     private static final String XML_EXTENSION = ".xml";
+    private static final String SEPARATOR = "-".repeat(60);
+    private static final String INDENT = "    ";
 
     private Main() {
     }
@@ -33,6 +35,8 @@ public final class Main {
         while (running) {
             printMenu();
             int command = readIntInRange(scanner, "Enter a command number: ", 1, 6);
+            System.out.println(SEPARATOR);
+            System.out.println();
             try {
                 switch (command) {
                     case 1 -> handleLoadEventsFile(engine, scanner);
@@ -46,6 +50,8 @@ public final class Main {
                 // Safety net only — every handler above already catches its own specific exception types.
                 System.out.println(e.getMessage());
             }
+            System.out.println();
+            System.out.println(SEPARATOR);
         }
         System.out.println("Goodbye.");
         scanner.close();
@@ -53,7 +59,6 @@ public final class Main {
 
     // Prints the 6-item command menu; every item is always shown, regardless of engine state.
     private static void printMenu() {
-        System.out.println();
         System.out.println("=== Guess Market ===");
         System.out.println("1. Load XML events file");
         System.out.println("2. List events");
@@ -182,10 +187,10 @@ public final class Main {
         for (int i = 0; i < events.size(); i++) {
             EventSummaryDto event = events.get(i);
             System.out.println((i + 1) + ". " + event.eventName());
-            System.out.println("   Description: " + event.description());
-            System.out.println("   Commission: " + event.commissionRate() + "% (" + formatCommissionMode(event.commissionMode()) + ")");
-            System.out.println("   Options: " + event.optionOneName() + " / " + event.optionTwoName());
-            System.out.println("   Status: " + formatStatus(event.status()));
+            System.out.println(INDENT + "Description: " + event.description());
+            System.out.println(INDENT + "Commission: " + event.commissionRate() + "% (" + formatCommissionMode(event.commissionMode()) + ")");
+            System.out.println(INDENT + "Options: " + event.optionOneName() + " / " + event.optionTwoName());
+            System.out.println(INDENT + "Status: " + formatStatus(event.status()));
         }
     }
 
@@ -217,9 +222,9 @@ public final class Main {
         System.out.println();
         System.out.println("Event: " + status.eventName() + " (id " + status.eventId() + ") - " + formatStatus(status.status()));
         System.out.println("Current prices:");
-        System.out.println("1. " + status.optionOneName() + ": " + formatDecimal(status.optionOnePrice())
+        System.out.println(INDENT + "1. " + status.optionOneName() + ": " + formatDecimal(status.optionOnePrice())
                 + " (" + formatDecimal(status.optionOneShares()) + " shares bought)");
-        System.out.println("2. " + status.optionTwoName() + ": " + formatDecimal(status.optionTwoPrice())
+        System.out.println(INDENT + "2. " + status.optionTwoName() + ": " + formatDecimal(status.optionTwoPrice())
                 + " (" + formatDecimal(status.optionTwoShares()) + " shares bought)");
         System.out.println("Market Maker account balance: " + formatDecimal(status.marketMakerBalance()));
         System.out.println("Total commission collected: " + formatDecimal(status.totalCommissionCollected()));
@@ -228,10 +233,10 @@ public final class Main {
         }
         System.out.println("Trade history (newest first):");
         if (status.tradeHistory().isEmpty()) {
-            System.out.println("No trades yet.");
+            System.out.println(INDENT + "No trades yet.");
         } else {
             for (TradeRecordDto trade : status.tradeHistory()) {
-                System.out.println("- " + trade.optionName() + ": " + formatDecimal(trade.quantity())
+                System.out.println(INDENT + "- " + trade.optionName() + ": " + formatDecimal(trade.quantity())
                         + " shares at " + formatDecimal(trade.pricePerShare()) + " each");
             }
         }

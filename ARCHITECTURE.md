@@ -482,8 +482,13 @@ the intentionally top-level, `ui`-facing packages.
 - **What it is:** The application's entry point and the entire console UI — the only place in
   the project that imports `java.util.Scanner` or calls `System.out`. Runs the real 6-command
   menu loop: show menu → read a command number → dispatch to that command's own small handler
-  method → (loop) → repeat until Exit. All 6 commands are now fully real — this file is
-  Exercise 1's complete UI.
+  method → (loop) → repeat until Exit. All 6 commands are fully real — this file is Exercise 1's
+  complete UI. Every command's output is framed by a plain-ASCII `SEPARATOR` line (a row of
+  `-`, printed once in the main loop itself — before and after each command's dispatch — so no
+  individual handler needs its own separator logic), and nested list content (event details
+  under `printEventSummaries`, option-price lines and trade-history rows under
+  `printEventStatus`) uses one shared `INDENT` constant rather than hand-typed spaces, so
+  indentation can't silently drift between commands.
 - **Why it exists:** Every runnable Java program needs a `main` method, and per the module
   split (CLAUDE.md Section 2) this is the *only* place allowed to do I/O — `engine` never
   imports `Scanner`/`System.out` anywhere. The loop body itself is intentionally thin (one
