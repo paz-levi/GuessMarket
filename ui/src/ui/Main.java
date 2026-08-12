@@ -8,10 +8,12 @@ import dto.CommissionMode;
 import dto.EventStatus;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
+import dto.TradeConfirmationDto;
 import dto.TradeRecordDto;
 import engine.IEngine;
 import exception.EventNotFoundException;
 import exception.GuessMarketException;
+import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
 import exception.XmlValidationException;
 
@@ -106,9 +108,39 @@ public final class Main {
         }
     }
 
-    // Command 4: not implemented yet.
+    // Command 4: lets the user buy shares of one option in an ACTIVE event, then prints the purchase confirmation.
     private static void handleParticipateInEvent(IEngine engine, Scanner scanner) {
-        System.out.println("Not implemented yet.");
+        List<EventSummaryDto> events;
+        try {
+            events = engine.listEvents();
+        } catch (InvalidCommandStateException e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+        Integer eventId = selectEventId(filterActiveEvents(events), scanner,
+                "There are no active events to participate in.");
+        if (eventId == null) {
+            return;
+        }
+
+        EventStatusDto statusBeforePurchase;
+        try {
+            statusBeforePurchase = engine.getEventStatus(eventId);
+        } catch (InvalidCommandStateException | EventNotFoundException e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+        printEventStatus(statusBeforePurchase);
+
+        int optionNumber = selectOptionNumber(statusBeforePurchase.optionOneName(),
+                statusBeforePurchase.optionTwoName(), scanner, "Select an option by number: ");
+        int shareQuantity = readInt(scanner, "Enter the number of shares to buy: ");
+
+        try {
+            printTradeConfirmation(engine.participateInEvent(eventId, optionNumber, shareQuantity));
+        } catch (InvalidCommandStateException | EventNotFoundException | IllegalTradeException e) {
+            System.out.println(e.getMessage());
+        }
     }
 
     // Command 5: not implemented yet.
@@ -128,6 +160,11 @@ public final class Main {
         }
     }
 
+    // Filters a list of event summaries down to only those currently ACTIVE.
+    private static List<EventSummaryDto> filterActiveEvents(List<EventSummaryDto> events) {
+        return events.stream().filter(event -> event.status() == EventStatus.ACTIVE).toList();
+    }
+
     // Prints events via printEventSummaries and reads a 1-based selection; returns the chosen eventId, or null (after printing emptyMessage) if the list is empty.
     private static Integer selectEventId(List<EventSummaryDto> events, Scanner scanner, String emptyMessage) {
         if (events.isEmpty()) {
@@ -137,6 +174,13 @@ public final class Main {
         printEventSummaries(events);
         int choice = readIntInRange(scanner, "Select an event by number: ", 1, events.size());
         return events.get(choice - 1).eventId();
+    }
+
+    // Prints the two option names as a 2-item numbered list and reads a validated 1-2 selection.
+    private static int selectOptionNumber(String optionOneName, String optionTwoName, Scanner scanner, String prompt) {
+        System.out.println("1. " + optionOneName);
+        System.out.println("2. " + optionTwoName);
+        return readIntInRange(scanner, prompt, 1, 2);
     }
 
     // Prints the full "event trading status" view: both options' price/shares, account state, total commission, the winning option (if closed), and trade history newest-first.
@@ -162,6 +206,17 @@ public final class Main {
                         + " shares at " + formatDecimal(trade.pricePerShare()) + " each");
             }
         }
+    }
+
+    // Prints a successful purchase's confirmation: total paid, the shares-cost/commission breakdown, then the event's resulting status.
+    private static void printTradeConfirmation(TradeConfirmationDto confirmation) {
+        System.out.println();
+        System.out.println("Purchase successful: " + formatDecimal(confirmation.shareQuantity())
+                + " shares of " + confirmation.optionName());
+        System.out.println("Share cost: " + formatDecimal(confirmation.shareCost()));
+        System.out.println("Commission paid: " + formatDecimal(confirmation.commissionPaid()));
+        System.out.println("Total paid: " + formatDecimal(confirmation.totalPaid()));
+        printEventStatus(confirmation.eventStatus());
     }
 
     // Reads one integer, retrying on non-numeric input — the only place integer parsing happens.

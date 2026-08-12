@@ -387,8 +387,9 @@ the intentionally top-level, `ui`-facing packages.
   only nesting a raw domain object is forbidden.
 - **What it connects to:** Returned by `IEngine.participateInEvent(int, int, int)`. Built by
   `EngineImpl.toTradeConfirmationDto()` from the `Trade` `TradeExecutor.participate()` returns
-  plus a `toStatusDto()` call on the same, now-mutated `Event`. Will be consumed by `ui`'s
-  "participate in an event" command (not yet written) to print a confirmation message.
+  plus a `toStatusDto()` call on the same, now-mutated `Event`. Consumed by
+  `ui.Main.printTradeConfirmation()`, which prints the breakdown fields directly and delegates
+  its nested `eventStatus` straight to `printEventStatus()`.
 
 ### `exception` package
 
@@ -465,9 +466,9 @@ the intentionally top-level, `ui`-facing packages.
 - **What it is:** The application's entry point and the entire console UI — the only place in
   the project that imports `java.util.Scanner` or calls `System.out`. Runs the real 6-command
   menu loop: show menu → read a command number → dispatch to that command's own small handler
-  method → (loop) → repeat until Exit. Commands 1 (Load), 2 (List), 3 (Trading Status), and 6
-  (Exit) are fully real; commands 4–5 (`handleParticipateInEvent`/`handleCloseEvent`) are still
-  one-line `"Not implemented yet."` stubs, filled in over the next couple of commits.
+  method → (loop) → repeat until Exit. Commands 1 (Load), 2 (List), 3 (Trading Status), 4
+  (Participate), and 6 (Exit) are fully real; only command 5 (`handleCloseEvent`) is still a
+  one-line `"Not implemented yet."` stub.
 - **Why it exists:** Every runnable Java program needs a `main` method, and per the module
   split (CLAUDE.md Section 2) this is the *only* place allowed to do I/O — `engine` never
   imports `Scanner`/`System.out` anywhere, confirmed unchanged by this stage. The loop body
@@ -490,11 +491,25 @@ the intentionally top-level, `ui`-facing packages.
   `null` after printing a caller-supplied message if the list is empty — Command 3 passes it the
   **full** `listEvents()` result, since ` docs-reference/exercise1-requirements.md:204` has no
   "active-only" qualifier and `:225` requires Command 3 to still show a *closed* event's final
-  state; commands 4/5 will pass it a client-side `ACTIVE`-only filtered list instead, which is
-  the case where the empty-list branch actually triggers), `printEventStatus` (the Command 3
-  view: both options' price/shares, account balance, total commission, the winning-option line
-  only when set, and trade history newest-first — also reused once Participate/Close return an
-  `EventStatusDto` of their own), and `formatDecimal`/`formatStatus`/`formatCommissionMode`
-  (small presentation helpers — `formatDecimal` pins `Locale.US` explicitly so `%.2f` can't
-  silently print a comma on a non-English-default JVM; applied uniformly to share/quantity
-  counts too, not just price, since CLAUDE.md's 2-decimal rule states no exceptions).
+  state; Command 4 is the first to pass it a filtered list, making the empty-list branch
+  reachable for the first time), `filterActiveEvents` (a one-line `Stream.filter` down to
+  `EventStatus.ACTIVE`, used by `handleParticipateInEvent` and, next commit,
+  `handleCloseEvent` — one shared implementation for a filter both commands need identically),
+  `selectOptionNumber` (prints the two option names as a 2-item list and reads a validated 1-2
+  choice, per `:237`'s "by number, never by typing the name" — takes its prompt text as a
+  parameter since Close will phrase the same question differently), `printEventStatus` (the
+  Command 3 view: both options' price/shares, account balance, total commission, the
+  winning-option line only when set, and trade history newest-first — reused unchanged by
+  `printTradeConfirmation` below, and will be again once Close returns its own `EventStatusDto`),
+  `printTradeConfirmation` (Command 4's confirmation: total paid and the shares-cost/commission
+  breakdown, then `printEventStatus(confirmation.eventStatus())` — zero duplicated rendering
+  logic, since `TradeConfirmationDto` already nests the exact `EventStatusDto` shape
+  `printEventStatus` expects), and `formatDecimal`/`formatStatus`/`formatCommissionMode` (small
+  presentation helpers — `formatDecimal` pins `Locale.US` explicitly so `%.2f` can't silently
+  print a comma on a non-English-default JVM; applied uniformly to share/quantity counts too,
+  not just price, since CLAUDE.md's 2-decimal rule states no exceptions). `handleParticipateInEvent`
+  itself reads event → option → share quantity as three independent, sequential prompts — each
+  underlying `readInt`/`readIntInRange` call only returns once its own input is valid, so a bad
+  entry at one step can never discard an already-resolved earlier one; no ui-side check on share
+  quantity being positive, since that's `engine`'s own business rule (`IllegalTradeException`)
+  like every other trading-rule check in this project.
