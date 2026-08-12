@@ -11,6 +11,7 @@ import dto.EventStatus;
 import dto.TradeConfirmationDto;
 import dto.TradeRecordDto;
 import engine.IEngine;
+import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
@@ -53,7 +54,16 @@ public class EngineImpl implements IEngine {
 
     // Maps a domain Event to the DTO shape ui is allowed to see.
     private static EventSummaryDto toSummaryDto(Event event) {
-        return new EventSummaryDto(event.getId(), event.getName(), event.getStatus());
+        return new EventSummaryDto(event.getId(), event.getName(), event.getDescription(),
+                event.getCommissionRate(), toDtoCommissionMode(event.getCommissionMode()),
+                event.getOptionOne().getName(), event.getOptionTwo().getName(), event.getStatus());
+    }
+
+    // Maps the domain-internal commission mode enum to the dto-level one ui is allowed to see.
+    private static dto.CommissionMode toDtoCommissionMode(CommissionMode commissionMode) {
+        return commissionMode == CommissionMode.ON_PURCHASE
+                ? dto.CommissionMode.ON_PURCHASE
+                : dto.CommissionMode.ON_CLOSE;
     }
 
     // Returns the full trading-status view for one event, active or closed.

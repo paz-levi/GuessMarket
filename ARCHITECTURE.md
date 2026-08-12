@@ -39,6 +39,7 @@ flowchart TD
             TradeRecordDto["TradeRecordDto"]
             TradeConfirmationDto["TradeConfirmationDto"]
             EventStatus["EventStatus"]
+            DtoCommissionMode["CommissionMode"]
         end
 
         subgraph EXC["exception"]
@@ -63,6 +64,9 @@ flowchart TD
     TradeExecutor -->|"mutates"| Event
     EngineImpl -->|"maps Event to"| DTO
     EngineImpl -->|"throws"| EXC
+    Main -->|"loadEventsFile()/listEvents()/getEventStatus()/participateInEvent()/closeEvent()"| IEngine
+    Main -->|"catches"| EXC
+    Main -->|"reads/prints"| DTO
 ```
 
 ---
@@ -107,7 +111,9 @@ flowchart TD
   returning anything); `EngineImpl` only then clears and repopulates its internal
   `Map<Integer, Event>` — so a failed load never touches the previously-loaded valid state.
   `listEvents()` maps each `Event` to an `EventSummaryDto` via the private `toSummaryDto()`
-  helper and returns the list, or throws `InvalidCommandStateException` if the map is empty.
+  helper (which now also calls `toDtoCommissionMode()` to translate
+  `engine.domain.CommissionMode` into the dto-level `dto.CommissionMode` ui is allowed to see)
+  and returns the list, or throws `InvalidCommandStateException` if the map is empty.
   Two private lookup helpers, `findEvent()`/`findActiveEvent()`, back every method that needs
   an event by id: both throw `InvalidCommandStateException` (shared `NO_FILE_LOADED_MESSAGE`
   constant, also now used by `listEvents()`) if nothing has ever been loaded, then
@@ -308,13 +314,34 @@ the intentionally top-level, `ui`-facing packages.
 
 #### `EventSummaryDto` (`engine/src/dto/EventSummaryDto.java`)
 - **What it is:** A "record" — a small immutable class that just holds a fixed set of
-  fields (here: an event's id, name, and status) with no other behavior.
-- **Why it exists:** Lets `listEvents()` hand `ui` exactly the data needed to print one row
-  of the event list, without ever exposing the engine's real internal `Event` object
-  (which `ui` must never see, per Section 2).
+  fields with no other behavior: id, name, description, commission rate/mode, both option
+  names, and status — every field Command 2's spec text requires.
+- **Why it exists:** Lets `listEvents()` hand `ui` exactly the data needed to print one full
+  row of the event list, without ever exposing the engine's real internal `Event` object
+  (which `ui` must never see, per Section 2). Originally only carried id/name/status; extended
+  while building the real console UI once Command 2's actual field list
+  (` docs-reference/exercise1-requirements.md:181–195`) was checked against it and found
+  incomplete — the same category of gap-filling done to `EventStatusDto` earlier, just
+  discovered here instead of during the trading-commands stage.
 - **What it connects to:** Returned inside a `List<EventSummaryDto>` by
-  `IEngine.listEvents()` (built there by `EngineImpl.toSummaryDto()`). Consumed by
-  `ui.Main.printEvents()`, which prints one row per event, 1-based.
+  `IEngine.listEvents()` (built there by `EngineImpl.toSummaryDto()`, which now also maps
+  `engine.domain.CommissionMode` to the dto-level one via `toDtoCommissionMode()`). Consumed
+  by `ui.Main.printEventSummaries()`, which prints one full block per event, 1-based — reused
+  as the pre-selection list for the "pick an event" step in later commands, since the spec
+  cross-references "per Command 2's details" for those too.
+
+#### `CommissionMode` (`engine/src/dto/CommissionMode.java`)
+- **What it is:** An enum with two values, `ON_PURCHASE` and `ON_CLOSE` — the dto-level
+  counterpart to `engine.domain.CommissionMode`.
+- **Why it exists:** `ui` must never see `engine.domain` types (Section 2), but
+  `EventSummaryDto` needs to carry a commission mode for Command 2's display. Mirrors exactly
+  how `dto.EventStatus` already solves the identical problem for event status: a small
+  dto-level enum, kept separate from its domain counterpart rather than relocating the domain
+  one (which would have meant touching `Event`, `TradeExecutor`, `EventsFileLoader`, and
+  `TradeExecutorTest` — all already tested and working — for a purely cosmetic reason).
+- **What it connects to:** Held as the `commissionMode` field on `EventSummaryDto`, set by
+  `EngineImpl.toDtoCommissionMode()`. Read by `ui.Main.formatCommissionMode()` to print
+  `"On Purchase"`/`"On Close"` instead of the raw constant name.
 
 #### `TradeRecordDto` (`engine/src/dto/TradeRecordDto.java`)
 - **What it is:** A record describing a single past trade — which option, how much, at
@@ -431,18 +458,29 @@ the intentionally top-level, `ui`-facing packages.
 ### `ui` package
 
 #### `Main` (`ui/src/ui/Main.java`)
-- **What it is:** The application's entry point — the `main` method the JVM looks for and
-  calls first when the JAR is run. Right now it does two things: load one events file (path
-  from `args[0]`, or a hardcoded default), then list and print events — there's no menu loop
-  yet.
-- **Why it exists:** Every runnable Java program needs a `main` method. It currently exists
-  as a minimal, deliberately narrow proof that the `engine`→`dto`→`ui` wiring genuinely
-  works end-to-end, before the real 6-command menu loop (a separate later step) is built on
-  top of it.
-- **What it connects to:** Calls `IEngine.createDefault()` → gets an `IEngine` reference
-  (never `EngineImpl` by name) → calls `loadEventsFile(filePath)`, catching
-  `XmlValidationException` and printing its message instead of crashing → then calls
-  `listEvents()` → gets back `List<EventSummaryDto>` → its private `printEvents()` helper
-  prints one line per event, numbered from 1. Also catches `InvalidCommandStateException`
-  (declared by `listEvents()`), which is now reachable in practice if the load step failed
-  and no file was ever successfully loaded.
+- **What it is:** The application's entry point and the entire console UI — the only place in
+  the project that imports `java.util.Scanner` or calls `System.out`. Runs the real 6-command
+  menu loop: show menu → read a command number → dispatch to that command's own small handler
+  method → (loop) → repeat until Exit. Commands 1 (Load), 2 (List), and 6 (Exit) are fully
+  real; commands 3–5 (`handleEventTradingStatus`/`handleParticipateInEvent`/`handleCloseEvent`)
+  are still one-line `"Not implemented yet."` stubs, filled in over the next few commits.
+- **Why it exists:** Every runnable Java program needs a `main` method, and per the module
+  split (CLAUDE.md Section 2) this is the *only* place allowed to do I/O — `engine` never
+  imports `Scanner`/`System.out` anywhere, confirmed unchanged by this stage. The loop body
+  itself is intentionally thin (one `switch`, one line per case) — all the actual read/print
+  work lives in each command's own `handleX` method, per CLAUDE.md Section 5's no-god-methods
+  rule.
+- **What it connects to:** Calls `IEngine.createDefault()` once, then repeatedly calls
+  whichever of `loadEventsFile`/`listEvents`/`getEventStatus`/`participateInEvent`/`closeEvent`
+  the selected command needs. Every menu item is always printed and always selectable — state
+  gating (e.g. "no file loaded yet") happens entirely through each handler catching the
+  engine's own specific exception and printing its message, never through hiding a menu entry.
+  An outer `catch (GuessMarketException e)` around the whole dispatch is a safety net beyond
+  each handler's own specific catches, so the loop truly can't crash on an engine exception —
+  only `case 6` (Exit) ever sets `running = false`. Shares several small helpers across
+  commands: `readInt`/`readIntInRange` (the only place integer parsing happens — every numeric
+  read, from the menu itself to a future event/option selection, retries through these rather
+  than risking a raw `NumberFormatException`), `printEventSummaries` (Command 2's display,
+  reused as the pre-selection list once commands 3–5 are real), and `formatDecimal`/
+  `formatStatus`/`formatCommissionMode` (small presentation helpers — `formatDecimal` pins
+  `Locale.US` explicitly so `%.2f` can't silently print a comma on a non-English-default JVM).

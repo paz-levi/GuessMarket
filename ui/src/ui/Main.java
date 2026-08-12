@@ -1,43 +1,151 @@
 package ui;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Scanner;
 
+import dto.CommissionMode;
+import dto.EventStatus;
 import dto.EventSummaryDto;
 import engine.IEngine;
+import exception.GuessMarketException;
 import exception.InvalidCommandStateException;
 import exception.XmlValidationException;
 
-// Entry point; currently just proves the engine-to-ui wiring by loading a file and listing events (no menu loop yet).
+// Entry point and the entire console UI: the main menu loop, every Scanner read, every System.out.println.
 public final class Main {
 
-    private static final String DEFAULT_TEST_FILE = "test_files/single.xml";
+    private static final String XML_EXTENSION = ".xml";
 
     private Main() {
     }
 
-    // Constructs the engine, loads a file, and prints the event list as a temporary wiring test.
+    // Runs the 6-command menu loop until Exit; nothing but Exit ever ends it.
     public static void main(String[] args) {
         IEngine engine = IEngine.createDefault();
-        String filePath = args.length > 0 ? args[0] : DEFAULT_TEST_FILE;
+        Scanner scanner = new Scanner(System.in);
+        boolean running = true;
+        while (running) {
+            printMenu();
+            int command = readIntInRange(scanner, "Enter a command number: ", 1, 6);
+            try {
+                switch (command) {
+                    case 1 -> handleLoadEventsFile(engine, scanner);
+                    case 2 -> handleListEvents(engine);
+                    case 3 -> handleEventTradingStatus(engine, scanner);
+                    case 4 -> handleParticipateInEvent(engine, scanner);
+                    case 5 -> handleCloseEvent(engine, scanner);
+                    case 6 -> running = false;
+                }
+            } catch (GuessMarketException e) {
+                // Safety net only — every handler above already catches its own specific exception types.
+                System.out.println(e.getMessage());
+            }
+        }
+        System.out.println("Goodbye.");
+        scanner.close();
+    }
+
+    // Prints the 6-item command menu; every item is always shown, regardless of engine state.
+    private static void printMenu() {
+        System.out.println();
+        System.out.println("=== Guess Market ===");
+        System.out.println("1. Load XML events file");
+        System.out.println("2. List events");
+        System.out.println("3. Event trading status");
+        System.out.println("4. Participate in an event");
+        System.out.println("5. Close an event");
+        System.out.println("6. Exit");
+    }
+
+    // Command 1: reads a full-line file path, does a cheap extension sanity check, then delegates to the engine.
+    private static void handleLoadEventsFile(IEngine engine, Scanner scanner) {
+        System.out.print("Enter the full path to the XML events file: ");
+        String filePath = scanner.nextLine().trim();
+        if (!filePath.toLowerCase(Locale.ROOT).endsWith(XML_EXTENSION)) {
+            System.out.println("The file path should end in .xml.");
+            return;
+        }
         try {
             engine.loadEventsFile(filePath);
-            System.out.println("File loaded successfully: " + filePath);
+            System.out.println("File loaded successfully.");
         } catch (XmlValidationException e) {
             System.out.println(e.getMessage());
         }
+    }
+
+    // Command 2: lists every currently loaded event.
+    private static void handleListEvents(IEngine engine) {
         try {
-            List<EventSummaryDto> events = engine.listEvents();
-            printEvents(events);
+            printEventSummaries(engine.listEvents());
         } catch (InvalidCommandStateException e) {
             System.out.println(e.getMessage());
         }
     }
 
-    // Prints one line per event, numbered starting at 1 per the project's 1-based display rule.
-    private static void printEvents(List<EventSummaryDto> events) {
+    // Command 3: not implemented yet.
+    private static void handleEventTradingStatus(IEngine engine, Scanner scanner) {
+        System.out.println("Not implemented yet.");
+    }
+
+    // Command 4: not implemented yet.
+    private static void handleParticipateInEvent(IEngine engine, Scanner scanner) {
+        System.out.println("Not implemented yet.");
+    }
+
+    // Command 5: not implemented yet.
+    private static void handleCloseEvent(IEngine engine, Scanner scanner) {
+        System.out.println("Not implemented yet.");
+    }
+
+    // Prints one numbered block per event with every field Command 2 requires; reused as the pre-selection list for later commands.
+    private static void printEventSummaries(List<EventSummaryDto> events) {
         for (int i = 0; i < events.size(); i++) {
             EventSummaryDto event = events.get(i);
-            System.out.println((i + 1) + ". " + event.eventName() + " [" + event.status() + "]");
+            System.out.println((i + 1) + ". " + event.eventName());
+            System.out.println("   Description: " + event.description());
+            System.out.println("   Commission: " + event.commissionRate() + "% (" + formatCommissionMode(event.commissionMode()) + ")");
+            System.out.println("   Options: " + event.optionOneName() + " / " + event.optionTwoName());
+            System.out.println("   Status: " + formatStatus(event.status()));
         }
+    }
+
+    // Reads one integer, retrying on non-numeric input — the only place integer parsing happens.
+    private static int readInt(Scanner scanner, String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String line = scanner.nextLine().trim();
+            try {
+                return Integer.parseInt(line);
+            } catch (NumberFormatException e) {
+                System.out.println("That's not a valid whole number. Please try again.");
+            }
+        }
+    }
+
+    // Reads one integer, retrying until it falls within [min, max].
+    private static int readIntInRange(Scanner scanner, String prompt, int min, int max) {
+        while (true) {
+            int value = readInt(scanner, prompt);
+            if (value >= min && value <= max) {
+                return value;
+            }
+            System.out.println("Please enter a number between " + min + " and " + max + ".");
+        }
+    }
+
+    // Formats a decimal with exactly 2 places, always using a period regardless of the JVM's default locale.
+    private static String formatDecimal(double value) {
+        return String.format(Locale.US, "%.2f", value);
+    }
+
+    // Friendly display text for an event's lifecycle status.
+    private static String formatStatus(EventStatus status) {
+        return status == EventStatus.ACTIVE ? "Active" : "Closed";
+    }
+
+    // Friendly display text for a commission-collection mode.
+    private static String formatCommissionMode(CommissionMode commissionMode) {
+        return commissionMode == CommissionMode.ON_PURCHASE ? "On Purchase" : "On Close";
     }
 }
