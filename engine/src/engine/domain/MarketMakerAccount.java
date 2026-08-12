@@ -18,4 +18,14 @@ public final class MarketMakerAccount {
     public double getTotalCommissionCollected() {
         return totalCommissionCollected;
     }
+
+    // Increases the balance by amount — money coming into the account (a purchase's share cost and/or commission).
+    public void credit(double amount) {
+        balance += amount;
+    }
+
+    // Adds amount to the lifetime commission-collected counter; a no-op when amount is 0.
+    public void addCommissionCollected(double amount) {
+        totalCommissionCollected += amount;
+    }
 }

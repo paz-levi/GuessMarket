@@ -1,0 +1,87 @@
+package engine.impl.trading;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import org.junit.jupiter.api.Test;
+
+import dto.EventStatus;
+import engine.domain.CommissionMode;
+import engine.domain.Event;
+import engine.domain.EventOption;
+import engine.domain.MarketMakerAccount;
+import engine.domain.Trade;
+import exception.IllegalTradeException;
+
+// Covers the commission math for both collection modes, plus the option-number/share-quantity validation rules.
+class TradeExecutorTest {
+
+    private static final double LIQUIDITY_PARAMETER = 100;
+    private static final double DELTA = 1e-9;
+
+    // ON_PURCHASE: commission is added on top of cost, and both amounts land in the account balance and the commission counter.
+    @Test
+    void onPurchaseCommissionIsAddedToCostAndCollectedImmediately() {
+        Event event = newEvent(50, CommissionMode.ON_PURCHASE);
+
+        Trade trade = TradeExecutor.participate(event, 1, 100);
+
+        double expectedCost = 62.01145069582775;
+        double expectedCommission = expectedCost * 0.5;
+        double expectedTotal = expectedCost + expectedCommission;
+
+        assertEquals(expectedCost, trade.getPricePerShare() * trade.getQuantity(), DELTA);
+        assertEquals(expectedCommission, trade.getCommissionPaid(), DELTA);
+        assertEquals(expectedTotal, trade.getTotalPaid(), DELTA);
+        assertEquals(100, event.getOptionOne().getSharesOutstanding(), DELTA);
+        assertEquals(expectedTotal, event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(expectedCommission, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+    }
+
+    // ON_CLOSE: no commission is charged at purchase time — only the share cost is credited, and the commission counter stays at 0.
+    @Test
+    void onCloseChargesNoCommissionAtPurchaseTime() {
+        Event event = newEvent(30, CommissionMode.ON_CLOSE);
+
+        Trade trade = TradeExecutor.participate(event, 2, 50);
+
+        double expectedCost = 100 * Math.log(Math.exp(50.0 / 100) + Math.exp(0.0 / 100)) - 100 * Math.log(2);
+
+        assertEquals(0.0, trade.getCommissionPaid(), DELTA);
+        assertEquals(expectedCost, trade.getTotalPaid(), DELTA);
+        assertEquals(50, event.getOptionTwo().getSharesOutstanding(), DELTA);
+        assertEquals(expectedCost, event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(0.0, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+    }
+
+    // Buying the other option leaves the first option's shares untouched — only the chosen option's q changes.
+    @Test
+    void onlyTheChosenOptionsSharesChange() {
+        Event event = newEvent(10, CommissionMode.ON_PURCHASE);
+
+        TradeExecutor.participate(event, 2, 20);
+
+        assertEquals(0, event.getOptionOne().getSharesOutstanding(), DELTA);
+        assertEquals(20, event.getOptionTwo().getSharesOutstanding(), DELTA);
+    }
+
+    @Test
+    void rejectsOptionNumberOutsideOneOrTwo() {
+        Event event = newEvent(10, CommissionMode.ON_PURCHASE);
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 0, 10));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 3, 10));
+    }
+
+    @Test
+    void rejectsNonPositiveShareQuantity() {
+        Event event = newEvent(10, CommissionMode.ON_PURCHASE);
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, 0));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, -5));
+    }
+
+    private static Event newEvent(int commissionRate, CommissionMode commissionMode) {
+        return new Event(1, "Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
+                commissionRate, commissionMode, (int) LIQUIDITY_PARAMETER,
+                new MarketMakerAccount(0.0), EventStatus.ACTIVE);
+    }
+}

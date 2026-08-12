@@ -27,11 +27,11 @@ public interface IEngine {
     List<EventSummaryDto> listEvents() throws InvalidCommandStateException;
 
     // Returns current prices, MM account state, commission collected, and trade history for one event.
-    EventStatusDto getEventStatus(int eventId) throws EventNotFoundException;
+    EventStatusDto getEventStatus(int eventId) throws InvalidCommandStateException, EventNotFoundException;
 
-    // Buys into one of an event's two options and returns a confirmation of the trade.
-    TradeConfirmationDto participateInEvent(int eventId, int optionNumber, double amount)
-            throws EventNotFoundException, IllegalTradeException;
+    // Buys shareQuantity shares of one of an event's two options and returns a confirmation of the trade.
+    TradeConfirmationDto participateInEvent(int eventId, int optionNumber, int shareQuantity)
+            throws InvalidCommandStateException, EventNotFoundException, IllegalTradeException;
 
     // Declares the winning option, settles payouts, and returns the event's final settled state.
     EventStatusDto closeEvent(int eventId, int winningOptionNumber)

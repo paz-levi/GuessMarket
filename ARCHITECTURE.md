@@ -17,6 +17,9 @@ flowchart TD
             subgraph XML["engine.impl.xml"]
                 EventsFileLoader["EventsFileLoader"]
             end
+            subgraph TRADING["engine.impl.trading"]
+                TradeExecutor["TradeExecutor"]
+            end
         end
 
         subgraph DOMAIN["engine.domain (ui-inaccessible)"]
@@ -55,6 +58,9 @@ flowchart TD
     Event --> MarketMakerAccount
     Event --> CommissionMode
     Event --> Trade
+    EngineImpl -->|"participateInEvent() delegates to"| TradeExecutor
+    TradeExecutor -->|"prices via"| LmsrMath
+    TradeExecutor -->|"mutates"| Event
     EngineImpl -->|"maps Event to"| DTO
     EngineImpl -->|"throws"| EXC
 ```
@@ -80,13 +86,16 @@ flowchart TD
   `IEngine.createDefault()` → gets an `IEngine` reference → calls `listEvents()` → gets
   back `List<EventSummaryDto>` → prints one row per event, 1-based. Its method signatures
   reference DTO types from `dto` and exception types from `exception`, and nothing else.
+  `participateInEvent`'s third parameter was fixed from the skeleton stage's `double amount`
+  to `int shareQuantity` while implementing it — the spec's third argument is a share count,
+  not a dollar figure, and nothing depended on the old signature yet.
 
 ### `engine.impl` package
 
 #### `EngineImpl` (`engine/src/engine/impl/EngineImpl.java`)
-- **What it is:** The one concrete class that implements `IEngine`. `loadEventsFile()` and
-  `listEvents()` are now fully real; the other 3 methods still just throw
-  `UnsupportedOperationException` as placeholders.
+- **What it is:** The one concrete class that implements `IEngine`. `loadEventsFile()`,
+  `listEvents()`, `getEventStatus()`, and `participateInEvent()` are now fully real; only
+  `closeEvent()` still throws `UnsupportedOperationException` as a placeholder.
 - **Why it exists:** Gives the project something that can actually be instantiated and
   passed to `ui` as an `IEngine`, so the wiring between modules is provable even before all
   business logic exists. Kept in its own `impl` sub-package (separate from `engine.IEngine`
@@ -98,10 +107,23 @@ flowchart TD
   returning anything); `EngineImpl` only then clears and repopulates its internal
   `Map<Integer, Event>` — so a failed load never touches the previously-loaded valid state.
   `listEvents()` maps each `Event` to an `EventSummaryDto` via the private `toSummaryDto()`
-  helper and returns the list, or throws `InvalidCommandStateException` if the map is empty
-  (i.e. no file has been loaded yet — reachable now that no hardcoded sample data seeds the
-  map). Constructed by `ui.Main` exclusively through `IEngine.createDefault()`, never
-  directly.
+  helper and returns the list, or throws `InvalidCommandStateException` if the map is empty.
+  Two private lookup helpers, `findEvent()`/`findActiveEvent()`, back every method that needs
+  an event by id: both throw `InvalidCommandStateException` (shared `NO_FILE_LOADED_MESSAGE`
+  constant, also now used by `listEvents()`) if nothing has ever been loaded, then
+  `EventNotFoundException` if the id is unknown; `findActiveEvent()` additionally throws
+  `IllegalTradeException` if the event isn't `ACTIVE` (checked as `!= ACTIVE`, not
+  `== CLOSED`, so a future 3rd `EventStatus` value in Ex2 is still rejected correctly without
+  touching this code). `getEventStatus()` calls `findEvent()` (works for closed events too)
+  then the private `toStatusDto()` mapper, which computes both option prices via
+  `LmsrMath.price(...)` and builds trade history newest-first (by reversing `Event`'s
+  chronological storage order, not sorting by timestamp). `participateInEvent()` calls
+  `findActiveEvent()`, delegates the actual purchase to
+  `engine.impl.trading.TradeExecutor.participate()`, then combines the resulting `Trade` and
+  the freshly-mutated `Event` into a `TradeConfirmationDto` via `toTradeConfirmationDto()`
+  (which itself calls `toStatusDto()` — one shared mapper, three call sites, no duplicated
+  DTO-building logic). Constructed by `ui.Main` exclusively through `IEngine.createDefault()`,
+  never directly.
 
 ### `engine.domain` package
 
@@ -118,25 +140,31 @@ the intentionally top-level, `ui`-facing packages.
   written) trading and closing logic to decide when to charge commission.
 
 #### `EventOption` (`engine/src/engine/domain/EventOption.java`)
-- **What it is:** A small class holding just a name — one of an event's two outcomes
-  (what the XML calls a `GM-option`).
+- **What it is:** A small class holding a name and a running `sharesOutstanding` count — one
+  of an event's two outcomes (what the XML calls a `GM-option`).
 - **Why it exists:** Every event needs exactly two of these; giving the outcome its own
-  type (rather than a bare `String`) leaves room to attach LMSR-related state (e.g. shares
-  outstanding) once that math is implemented.
+  type (rather than a bare `String`) is what let `sharesOutstanding` + `addShares()` get
+  attached directly to it once LMSR trading needed somewhere to track "how many shares of
+  *this* option have been bought" — the number `LmsrMath.price()`/`purchaseCost()` need as
+  each option's `q`.
 - **What it connects to:** Held as `optionOne`/`optionTwo` fields on `Event` (two named
   fields, not a list — so "exactly two options" is structural, not just validated at
   runtime). Referenced by `Trade.option` to record which option a purchase was for.
+  `addShares()` is called by `engine.impl.trading.TradeExecutor.participate()`; nothing
+  validates its input (must be positive) since that's `TradeExecutor`'s job, not this class's.
 
 #### `Trade` (`engine/src/engine/domain/Trade.java`)
 - **What it is:** A record of one executed purchase — which option, how much, at what
   price, how much commission, and when.
 - **Why it exists:** The engine's own internal memory of trade history; its field shape
   mirrors `dto.TradeRecordDto` on purpose, since mapping one to the other is exactly what
-  will happen once `getEventStatus()` is wired up.
-- **What it connects to:** Held inside an `Event`'s `tradeHistory` list. Will be created
-  internally by the (not-yet-written) `participateInEvent` trading logic, and eventually
-  mapped to `dto.TradeRecordDto` for `ui` to see (never handed to `ui` directly, per the
-  deep-DTO rule in CLAUDE.md Section 2).
+  `EngineImpl.toTradeRecordDto()` does.
+- **What it connects to:** Held inside an `Event`'s `tradeHistory` list via `Event.addTrade()`.
+  Created by `engine.impl.trading.TradeExecutor.participate()` — `pricePerShare` holds the
+  share cost alone (no commission), `commissionPaid` and `totalPaid` are tracked as separate
+  fields, so "price paid" in trade-history display can mean share-cost-alone without losing
+  the other two numbers. Mapped to `dto.TradeRecordDto` by `EngineImpl.toTradeRecordDto()`
+  (never handed to `ui` directly, per the deep-DTO rule in CLAUDE.md Section 2).
 
 #### `MarketMakerAccount` (`engine/src/engine/domain/MarketMakerAccount.java`)
 - **What it is:** A small class holding two numbers: the account's current balance and its
@@ -145,9 +173,11 @@ the intentionally top-level, `ui`-facing packages.
   into, commissions are collected into, and payouts are made from; keeping the running
   balance and the lifetime commission total as separate fields matches the "event trading
   status" view needing to show both independently.
-- **What it connects to:** Held as the `marketMakerAccount` field on `Event`. Will be
-  mutated internally by the (not-yet-written) trading/closing logic — no public mutators
-  exist yet since nothing calls them today.
+- **What it connects to:** Held as the `marketMakerAccount` field on `Event`. `credit()` and
+  `addCommissionCollected()` are called by `engine.impl.trading.TradeExecutor.participate()`
+  on every purchase (a `debit()` mutator for payouts arrives with `closeEvent()`). No
+  validation inside either mutator — both are simple `+=` adjustments; the caller is
+  responsible for passing sensible values.
 
 #### `Event` (`engine/src/engine/domain/Event.java`)
 - **What it is:** The engine's real internal representation of one Guess Market event —
@@ -164,9 +194,16 @@ the intentionally top-level, `ui`-facing packages.
   display, trading) read it back off the already-built `Event`, never by re-parsing XML.
 - **What it connects to:** Built by `engine.impl.xml.EventsFileLoader.buildEvent()` from a
   parsed `GM-event` XML element, one fresh instance per loaded event (no reuse across
-  loads). Read by `EngineImpl.toSummaryDto()` to build the DTO `ui` actually sees. Its
-  `getTradeHistory()` returns an unmodifiable view of its internal `List<Trade>` so nothing
-  outside `Event` can mutate engine state through the reference.
+  loads). Read by `EngineImpl.toSummaryDto()`/`toStatusDto()` to build the DTOs `ui` actually
+  sees. Its `getTradeHistory()` returns an unmodifiable view of its internal `List<Trade>` so
+  nothing outside `Event` can mutate engine state through the reference — the only way to add
+  a trade is the new `addTrade(Trade)` method. Two more new methods, `getOption(int)` and
+  `getOtherOption(int)`, resolve 1→`optionOne`/2→`optionTwo` (and the reverse); both are
+  intentionally "dumb" — no validation that the number is 1 or 2 — because
+  `engine.impl.trading.TradeExecutor` is where every trading-rule validation is centralized,
+  and callers here are required to have already checked. `status` stays `final` for now
+  (nothing in `participateInEvent` changes it); it becomes mutable, alongside a `close()`
+  method, when `closeEvent()` is implemented.
 
 ### `engine.domain.lmsr` package
 
@@ -182,11 +219,12 @@ the intentionally top-level, `ui`-facing packages.
   Deliberately has no relationship to `Event` via inheritance or otherwise: trading logic will
   *use* these methods (composition), not extend or implement anything LMSR-shaped, keeping the
   door open for Ex2's Order Book to be an entirely separate, unrelated mechanism.
-- **What it connects to:** Not called from anywhere yet — `EngineImpl`'s trading commands
-  (`participateInEvent`, `closeEvent`) are still unimplemented placeholders. Verified against
-  the appendix's worked example by `engine/test/engine/domain/lmsr/LmsrMathTest.java`, run via
-  the JUnit Platform Console Standalone jar in `lib/` (test-only dependency — never bundled
-  into `engine.jar`). `test.bat` at the project root compiles and runs it.
+- **What it connects to:** Called by `engine.impl.trading.TradeExecutor.participate()`
+  (`purchaseCost()` for the trade's cost) and by `EngineImpl.toStatusDto()` (`price()` for
+  both options' current prices). Verified against the appendix's worked example by
+  `engine/test/engine/domain/lmsr/LmsrMathTest.java`, run via the JUnit Platform Console
+  Standalone jar in `lib/` (test-only dependency — never bundled into `engine.jar`). `test.bat`
+  at the project root compiles and runs it.
 
 ### `engine.impl.xml` package
 
@@ -210,6 +248,31 @@ the intentionally top-level, `ui`-facing packages.
   event's initial LMSR subsidy (`b · ln(2)`, per `docs-reference/lmsr-appendix.md`'s worked
   example) and constructs each event's `MarketMakerAccount` with that as its starting
   balance.
+
+### `engine.impl.trading` package
+
+#### `TradeExecutor` (`engine/src/engine/impl/trading/TradeExecutor.java`)
+- **What it is:** A class with no instances (only `static` methods) that executes a share
+  purchase against an already-resolved `Event`: validates the request, runs the LMSR
+  cost/commission math, mutates the event's state, and records the trade. A `close()` method
+  for `closeEvent()` arrives in a follow-up commit, sharing this same class and its private
+  `validateOptionNumber()` helper.
+- **Why it exists:** Same shape and reasoning as `engine.impl.xml.EventsFileLoader` — keeps
+  `EngineImpl.participateInEvent()` a thin delegator instead of a god-method, and gives
+  trading-rule validation (bad option number, non-positive share quantity, and — via
+  `EngineImpl.findActiveEvent()` before this is even called — a closed event) exactly one
+  home. Takes an `Event` object, not an id: it never touches `EngineImpl`'s `events` map, so
+  event lookup/existence/active-state checking stays entirely `EngineImpl`'s job.
+- **What it connects to:** Called by `EngineImpl.participateInEvent()` after
+  `findActiveEvent()` has already confirmed the event exists and is `ACTIVE`. Computes cost
+  via `LmsrMath.purchaseCost()`, applies commission only when `CommissionMode.ON_PURCHASE`
+  (0 under `ON_CLOSE`), then calls `EventOption.addShares()`, `MarketMakerAccount.credit()`,
+  `MarketMakerAccount.addCommissionCollected()`, and `Event.addTrade()` — mutating the same
+  `Event` object `EngineImpl` already holds a reference to. Returns the new `Trade`, which
+  `EngineImpl.toTradeConfirmationDto()` combines with a freshly-built `EventStatusDto` (via
+  `toStatusDto()`) into the `TradeConfirmationDto` `ui` will eventually receive. Covered by
+  `engine/test/engine/impl/trading/TradeExecutorTest.java` (commission math for both modes,
+  plus the validation-rejection paths), run by the same `test.bat` as `LmsrMathTest`.
 
 ### `dto` package
 
@@ -242,30 +305,42 @@ the intentionally top-level, `ui`-facing packages.
 - **Why it exists:** Lets the event-status view show trade history as structured data
   rather than pre-formatted strings, without exposing whatever internal trade object the
   engine ends up using.
-- **What it connects to:** Held in the `tradeHistory` list field of `EventStatusDto`. Will
-  be produced internally by the engine every time a trade happens (not yet written), and
-  printed newest-first by `ui`'s "event trading status" command.
+- **What it connects to:** Held in the `tradeHistory` list field of `EventStatusDto`, produced
+  by `EngineImpl.toTradeRecordDto()` from a domain `Trade` every time one exists, ordered
+  newest-first by `EngineImpl.toStatusDto()`. Its `pricePerShare` is the share cost alone
+  (`Trade.pricePerShare`) — commission and total-paid stay available as separate fields,
+  matching the project's chosen meaning of "price paid" in trade-history display.
 
 #### `EventStatusDto` (`engine/src/dto/EventStatusDto.java`)
 - **What it is:** A record bundling everything the "event trading status" screen needs in
-  one shape: both option prices, the event's MM account balance, total commission
-  collected so far, and the trade history list.
-- **Why it exists:** One DTO shape covers both `getEventStatus()` (viewing a live event)
-  and `closeEvent()` (viewing the final settled state), so `ui` only needs one rendering
-  routine for both.
-- **What it connects to:** Returned by `IEngine.getEventStatus(int)` and
-  `IEngine.closeEvent(int, int)`. Its `tradeHistory` field is a `List<TradeRecordDto>`.
-  Will be consumed by `ui`'s trading-status and close-event commands (not yet written).
+  one shape: both options' names/prices/current shares outstanding, the event's MM account
+  balance, total commission collected so far, the winning option's name (`null` until
+  closed), and the trade history list.
+- **Why it exists:** One DTO shape covers `getEventStatus()` (viewing a live or closed
+  event), the status embedded inside a `TradeConfirmationDto`, and (once written)
+  `closeEvent()`'s return value, so `ui` only needs one rendering routine for all three.
+  `optionOneShares`/`optionTwoShares`/`winningOptionName` were added building this stage,
+  filling gaps against ` docs-reference/exercise1-requirements.md`'s actual Command 3 spec
+  text, which the original shape didn't fully cover.
+- **What it connects to:** Returned by `IEngine.getEventStatus(int)`, embedded in
+  `TradeConfirmationDto.eventStatus`, and (once written) by `IEngine.closeEvent(int, int)`.
+  Built exclusively by `EngineImpl.toStatusDto()` — the one place this shape gets assembled,
+  reused rather than re-derived at each call site. Its `tradeHistory` field is a
+  `List<TradeRecordDto>`.
 
 #### `TradeConfirmationDto` (`engine/src/dto/TradeConfirmationDto.java`)
-- **What it is:** A record summarizing the outcome of one successful trade: which option
-  was bought, how much, at what price, how much commission was charged, and the total
-  cost.
-- **Why it exists:** Gives `ui` a clean, structured receipt to print right after a
-  purchase, instead of reaching into engine internals to describe what just happened.
-- **What it connects to:** Returned by `IEngine.participateInEvent(int, int, double)`.
-  Will be consumed by `ui`'s "participate in an event" command (not yet written) to print
-  a confirmation message.
+- **What it is:** A record summarizing the outcome of one successful trade: which option was
+  bought, how many shares, the share cost and commission paid as separate numbers, the total,
+  and — nested inside it — the event's full `EventStatusDto` right after the trade.
+- **Why it exists:** Gives `ui` a clean, structured receipt to print right after a purchase
+  (per the spec: total paid, broken into shares-cost vs. commission) *and* the "Command 3"
+  current-status view the spec also requires showing at that point — without duplicating
+  `EventStatusDto`'s fields flatly. Nesting one DTO inside another is fine per CLAUDE.md;
+  only nesting a raw domain object is forbidden.
+- **What it connects to:** Returned by `IEngine.participateInEvent(int, int, int)`. Built by
+  `EngineImpl.toTradeConfirmationDto()` from the `Trade` `TradeExecutor.participate()` returns
+  plus a `toStatusDto()` call on the same, now-mutated `Event`. Will be consumed by `ui`'s
+  "participate in an event" command (not yet written) to print a confirmation message.
 
 ### `exception` package
 
@@ -300,27 +375,37 @@ the intentionally top-level, `ui`-facing packages.
   `InvalidCommandStateException` because "missing data" and "wrong state" are different
   kinds of problems for `ui` to explain to the user.
 - **What it connects to:** Declared on `IEngine.getEventStatus`,
-  `IEngine.participateInEvent`, and `IEngine.closeEvent`. Will be thrown internally by the
-  engine's (not-yet-written) event-lookup logic and caught by `ui`.
+  `IEngine.participateInEvent`, and `IEngine.closeEvent`. Thrown by `EngineImpl.findEvent()`
+  when `events` is non-empty but doesn't contain the requested id; caught by `ui` (not yet
+  written).
 
 #### `IllegalTradeException` (`engine/src/exception/IllegalTradeException.java`)
 - **What it is:** Thrown when a requested trade breaks a trading rule: an invalid option
-  number, a non-positive amount, or trading on an event that's already closed.
+  number, a non-positive share quantity, or trading on an event that's already closed.
 - **Why it exists:** Separates "this trade request itself is invalid" from "the event
-  doesn't exist" or "this command doesn't belong right now," so `ui` can tell the user
-  exactly what was wrong with their input.
-- **What it connects to:** Declared on `IEngine.participateInEvent` and
-  `IEngine.closeEvent`. Will be thrown internally by the engine's (not-yet-written)
-  trading and closing logic, and caught by `ui`.
+  doesn't exist" or "no file is loaded at all," so `ui` can tell the user exactly what was
+  wrong with their input. This is also the resolved category for "closed event" specifically
+  — see `InvalidCommandStateException`'s entry below for why that scenario landed here and
+  not there, despite both classes' original doc comments mentioning it.
+- **What it connects to:** Declared on `IEngine.participateInEvent` and `IEngine.closeEvent`.
+  Thrown by `EngineImpl.findActiveEvent()` (event exists but isn't `ACTIVE`) and by
+  `engine.impl.trading.TradeExecutor` (`validateOptionNumber()` for a bad option number;
+  directly for a non-positive share quantity). Caught by `ui` (not yet written).
 
 #### `InvalidCommandStateException` (`engine/src/exception/InvalidCommandStateException.java`)
-- **What it is:** Thrown when a command is invoked in a state where it doesn't make sense,
-  independent of any specific event id or trade input — e.g. closing an event that's
-  already closed, or running a command before any file has been loaded.
-- **Why it exists:** Catches the remaining "wrong moment for this" failures that aren't
-  about a missing event or a bad trade value.
-- **What it connects to:** Declared on `IEngine.listEvents` and `IEngine.closeEvent`. Will
-  be thrown internally by the engine and caught by `ui`.
+- **What it is:** Thrown when a command that requires loaded event data is invoked before any
+  file has ever been loaded — independent of any specific event id.
+- **Why it exists:** Its doc comment originally also listed "closing an event that's already
+  closed" as an example, overlapping with `IllegalTradeException`'s own doc. Resolved in favor
+  of `IllegalTradeException` for that case: this class's own stated scope is "independent of
+  any specific event id," and "event #5 is closed" is inherently about one specific id, so it
+  never actually fit here. This class is now reserved for the genuinely global case: nothing
+  loaded at all.
+- **What it connects to:** Declared on `IEngine.listEvents`, `IEngine.getEventStatus`,
+  `IEngine.participateInEvent`, and `IEngine.closeEvent` — every method that needs loaded
+  event data. Thrown by `EngineImpl.findEvent()` (and therefore also by `findActiveEvent()`,
+  which calls it first) and directly by `listEvents()`, both using the same
+  `NO_FILE_LOADED_MESSAGE` constant so the message is identical everywhere it's thrown.
 
 ---
 

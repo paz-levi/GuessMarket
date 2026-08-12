@@ -82,4 +82,19 @@ public final class Event {
     public List<Trade> getTradeHistory() {
         return Collections.unmodifiableList(tradeHistory);
     }
+
+    // Appends one executed trade to this event's history.
+    public void addTrade(Trade trade) {
+        tradeHistory.add(trade);
+    }
+
+    // Resolves 1->optionOne, 2->optionTwo; caller must validate optionNumber is 1 or 2 first.
+    public EventOption getOption(int optionNumber) {
+        return optionNumber == 1 ? optionOne : optionTwo;
+    }
+
+    // The option NOT selected by optionNumber — the "other side" whose share count LMSR math needs but doesn't change.
+    public EventOption getOtherOption(int optionNumber) {
+        return optionNumber == 1 ? optionTwo : optionOne;
+    }
 }
