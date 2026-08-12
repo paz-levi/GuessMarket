@@ -499,7 +499,14 @@ the intentionally top-level, `ui`-facing packages.
   individual handler needs its own separator logic), and nested list content (event details
   under `printEventSummaries`, option-price lines and trade-history rows under
   `printEventStatus`) uses one shared `INDENT` constant rather than hand-typed spaces, so
-  indentation can't silently drift between commands.
+  indentation can't silently drift between commands. Within `printEventSummaries` specifically,
+  each individual event is further framed by a second, shorter `EVENT_SEPARATOR` (40 dashes,
+  vs. `SEPARATOR`'s 60 — deliberately different lengths so the two nesting levels, one command's
+  whole output vs. one event within a list inside it, stay visually distinguishable when
+  scrolling back through a session), with a blank line between each of its 5 fields rather than
+  packed tight. Since `printEventSummaries` is the single method behind both Command 2's list
+  and the pre-selection list shown before Commands 3/4/5, this framing applies everywhere an
+  event's full details are listed without needing to touch any of those four call sites.
 - **Why it exists:** Every runnable Java program needs a `main` method, and per the module
   split (CLAUDE.md Section 2) this is the *only* place allowed to do I/O — `engine` never
   imports `Scanner`/`System.out` anywhere. The loop body itself is intentionally thin (one

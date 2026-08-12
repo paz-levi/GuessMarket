@@ -22,6 +22,7 @@ public final class Main {
 
     private static final String XML_EXTENSION = ".xml";
     private static final String SEPARATOR = "-".repeat(60);
+    private static final String EVENT_SEPARATOR = "-".repeat(40);
     private static final String INDENT = "    ";
 
     private Main() {
@@ -186,12 +187,18 @@ public final class Main {
     private static void printEventSummaries(List<EventSummaryDto> events) {
         for (int i = 0; i < events.size(); i++) {
             EventSummaryDto event = events.get(i);
+            System.out.println(EVENT_SEPARATOR);
             System.out.println((i + 1) + ". " + event.eventName());
+            System.out.println();
             System.out.println(INDENT + "Description: " + event.description());
+            System.out.println();
             System.out.println(INDENT + "Commission: " + event.commissionRate() + "% (" + formatCommissionMode(event.commissionMode()) + ")");
+            System.out.println();
             System.out.println(INDENT + "Options: " + event.optionOneName() + " / " + event.optionTwoName());
+            System.out.println();
             System.out.println(INDENT + "Status: " + formatStatus(event.status()));
         }
+        System.out.println(EVENT_SEPARATOR);
     }
 
     // Filters a list of event summaries down to only those currently ACTIVE.
