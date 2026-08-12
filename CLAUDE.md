@@ -243,9 +243,9 @@ Show me the resulting structure, interface, and DTO/exception shapes before proc
 
 ---
 
-## 7. Documentation — Macro + Micro
+## 7. Documentation — Macro + Micro + Log
 
-Two layers, serving two different purposes. Neither replaces the other.
+Three layers, serving three different purposes. None replaces another.
 
 ### Macro — `ARCHITECTURE.md` (the big picture: how classes connect)
 
@@ -285,6 +285,20 @@ public double calculatePurchaseCost(Event event, EventOption option, int shareQu
 
 The first time this section is followed, backfill these one-line comments onto everything
 already built in Step 1 (the skeleton) as well.
+
+### Log — `PROGRESS_LOG.md` (one entry per commit, newest first)
+
+**Rule: after every commit, append one entry to `PROGRESS_LOG.md` at the project root —
+automatically, without being asked.** This is a standing habit, not a one-off task; treat "I just
+committed" as the trigger, the same way "I just finished a stage" already triggers the
+`ARCHITECTURE.md`/one-line-comment habits above.
+
+Each entry: commit hash, one-line date, and 2–4 sentences covering what changed, why, and the key
+spec/CLAUDE.md rule it satisfies. Newest entry at the top. Keep it **terse and technical** — this
+is not the place for personal learning reflections (that's `MY_LEARNING_LOG.md`) or full
+architectural rationale (that's `ARCHITECTURE.md`); the bar is "scannable in seconds," not
+"explains itself from scratch." The first time this section is followed, backfill one entry per
+commit already made so far, newest first, same as the backfill rule for the other two habits.
 
 ---
 
