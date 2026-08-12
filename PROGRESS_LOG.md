@@ -6,6 +6,14 @@ scannable in seconds.
 
 ---
 
+### `5fe8097` — 2026-08-12 — Implement UI Command 4: Participate in an event
+Wired `handleParticipateInEvent`: `listEvents()` → `selectEventId` over a new
+`filterActiveEvents`-filtered list (`ACTIVE`-only, per line 234; first time the empty-list branch
+is reachable) → pre-purchase status preview → new `selectOptionNumber` (by number, per line 237)
+→ share-quantity read → `participateInEvent()` → new `printTradeConfirmation`, which reuses
+`printEventStatus` on the nested `EventStatusDto` rather than duplicating it. Verified against the
+previously-computed LMSR numbers (cost 62.01, commission 31.01, balance 162.33).
+
 ### `25236ad` — 2026-08-12 — Implement UI Command 3: Event trading status
 Wired `handleEventTradingStatus` for real: `listEvents()` → `selectEventId` over the **full**
 event list (any status) → `getEventStatus()` → new `printEventStatus()` helper. Confirmed with
