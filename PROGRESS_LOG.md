@@ -6,6 +6,14 @@ scannable in seconds.
 
 ---
 
+### `deb9b06` — 2026-08-12 — Frame each event in list output, space out its fields (formatting only)
+Added a shorter `EVENT_SEPARATOR` (40 dashes, vs. the command-level `SEPARATOR`'s 60, kept
+visually distinct on purpose) framing each event in `printEventSummaries()`, plus a blank line
+between its 5 fields. Single method, four call sites (Command 2's list and the pre-selection
+lists before Commands 3/4/5) — all get the same framing automatically. Chose a fixed width over
+sizing to content, since description lengths vary too widely in real data for that to read as
+consistent. Zero engine changes, zero data/precision impact.
+
 ### `b848db6` — 2026-08-12 — Guard TradeExecutor.participate() against LMSR numeric overflow
 Closes the previously-reported gap: a share quantity pushing `shares/b` past `Math.exp`'s
 ~709.78 overflow point silently produced `Infinity`/`NaN` throughout the purchase confirmation
