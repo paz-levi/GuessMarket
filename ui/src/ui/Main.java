@@ -15,6 +15,7 @@ import exception.EventNotFoundException;
 import exception.GuessMarketException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
+import exception.StateFileException;
 import exception.XmlValidationException;
 
 // Entry point and the entire console UI: the main menu loop, every Scanner read, every System.out.println.
@@ -28,14 +29,14 @@ public final class Main {
     private Main() {
     }
 
-    // Runs the 6-command menu loop until Exit; nothing but Exit ever ends it.
+    // Runs the 8-command menu loop until Exit; nothing but Exit ever ends it.
     public static void main(String[] args) {
         IEngine engine = IEngine.createDefault();
         Scanner scanner = new Scanner(System.in);
         boolean running = true;
         while (running) {
             printMenu();
-            int command = readIntInRange(scanner, "Enter a command number: ", 1, 6);
+            int command = readIntInRange(scanner, "Enter a command number: ", 1, 8);
             System.out.println(SEPARATOR);
             System.out.println();
             try {
@@ -45,7 +46,9 @@ public final class Main {
                     case 3 -> handleEventTradingStatus(engine, scanner);
                     case 4 -> handleParticipateInEvent(engine, scanner);
                     case 5 -> handleCloseEvent(engine, scanner);
-                    case 6 -> running = false;
+                    case 6 -> handleSaveState(engine, scanner);
+                    case 7 -> handleLoadState(engine, scanner);
+                    case 8 -> running = false;
                 }
             } catch (GuessMarketException e) {
                 // Safety net only — every handler above already catches its own specific exception types.
@@ -58,7 +61,7 @@ public final class Main {
         scanner.close();
     }
 
-    // Prints the 6-item command menu; every item is always shown, regardless of engine state.
+    // Prints the 8-item command menu; every item is always shown, regardless of engine state.
     private static void printMenu() {
         System.out.println("=== Guess Market ===");
         System.out.println("1. Load XML events file");
@@ -66,7 +69,9 @@ public final class Main {
         System.out.println("3. Event trading status");
         System.out.println("4. Participate in an event");
         System.out.println("5. Close an event");
-        System.out.println("6. Exit");
+        System.out.println("6. Save current state");
+        System.out.println("7. Load saved state");
+        System.out.println("8. Exit");
     }
 
     // Command 1: reads a full-line file path, does a cheap extension sanity check, then delegates to the engine.
@@ -179,6 +184,30 @@ public final class Main {
         try {
             printEventStatus(engine.closeEvent(eventId, winningOptionNumber));
         } catch (InvalidCommandStateException | EventNotFoundException | IllegalTradeException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    // Command 6: saves the full current system state (every event, trade history, account balances) to a file the engine names itself.
+    private static void handleSaveState(IEngine engine, Scanner scanner) {
+        System.out.print("Enter the full path (without extension) to save the state to: ");
+        String filePath = scanner.nextLine().trim();
+        try {
+            engine.saveState(filePath);
+            System.out.println("State saved successfully.");
+        } catch (InvalidCommandStateException | StateFileException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    // Command 7: loads a previously saved state file, fully replacing the current in-memory state -- distinct from Command 1's XML load.
+    private static void handleLoadState(IEngine engine, Scanner scanner) {
+        System.out.print("Enter the full path (without extension) to load a saved state from: ");
+        String filePath = scanner.nextLine().trim();
+        try {
+            engine.loadState(filePath);
+            System.out.println("State loaded successfully.");
+        } catch (StateFileException e) {
             System.out.println(e.getMessage());
         }
     }

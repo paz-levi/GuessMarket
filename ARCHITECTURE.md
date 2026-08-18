@@ -590,10 +590,10 @@ the intentionally top-level, `ui`-facing packages.
 
 #### `Main` (`ui/src/ui/Main.java`)
 - **What it is:** The application's entry point and the entire console UI — the only place in
-  the project that imports `java.util.Scanner` or calls `System.out`. Runs the real 6-command
-  menu loop: show menu → read a command number → dispatch to that command's own small handler
-  method → (loop) → repeat until Exit. All 6 commands are fully real — this file is Exercise 1's
-  complete UI. Every command's output is framed by a plain-ASCII `SEPARATOR` line (a row of
+  the project that imports `java.util.Scanner` or calls `System.out`. Runs the real 8-command
+  menu loop (the original 6 plus the Save/Load-State bonus's two): show menu → read a command
+  number → dispatch to that command's own small handler method → (loop) → repeat until Exit.
+  Every command's output is framed by a plain-ASCII `SEPARATOR` line (a row of
   `-`, printed once in the main loop itself — before and after each command's dispatch — so no
   individual handler needs its own separator logic), and nested list content (event details
   under `printEventSummaries`, option-price lines and trade-history rows under
@@ -618,7 +618,7 @@ the intentionally top-level, `ui`-facing packages.
   engine's own specific exception and printing its message, never through hiding a menu entry.
   An outer `catch (GuessMarketException e)` around the whole dispatch is a safety net beyond
   each handler's own specific catches, so the loop truly can't crash on an engine exception —
-  only `case 6` (Exit) ever sets `running = false`.
+  only `case 8` (Exit) ever sets `running = false`.
 
   Built from a small set of helpers shared across commands rather than each `handleX` method
   duplicating its own read/print logic:
@@ -659,3 +659,14 @@ the intentionally top-level, `ui`-facing packages.
   pre-validates business rules `engine` already owns (a non-positive share quantity, an
   out-of-range option number reaching `IllegalTradeException`) — `ui`'s only independent check
   anywhere is Command 1's cheap `.xml`-extension sanity test.
+
+  **Save/Load-State bonus stage:** two new commands, `6` (Save current state) and `7` (Load
+  saved state), with Exit renumbered from `6` to `8` so it stays last. `handleSaveState`/
+  `handleLoadState` mirror `handleLoadEventsFile`'s shape exactly (prompt via
+  `System.out.print`, read via `scanner.nextLine().trim()`) but with no local extension check —
+  unlike Command 1, the user types the path *without* an extension for this feature, and the
+  engine owns appending its own `.gmstate` extension internally, so there's nothing cheap for
+  `ui` to sanity-check here. Both call straight into `IEngine.saveState`/`loadState` and catch
+  the specific exceptions those methods declare (`InvalidCommandStateException`/
+  `StateFileException` for save, `StateFileException` alone for load), printing the message on
+  failure or a fixed confirmation string on success — identical pattern to every other handler.
