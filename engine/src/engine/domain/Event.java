@@ -1,5 +1,6 @@
 package engine.domain;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -7,7 +8,9 @@ import java.util.List;
 import dto.EventStatus;
 
 // A single Guess Market event: its two options, commission rules, MM account, status, and trade history.
-public final class Event {
+public final class Event implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     private final int id;
     private final String name;

@@ -1,7 +1,11 @@
 package engine.domain;
 
+import java.io.Serializable;
+
 // An event's own Market Maker ledger: running balance plus a separate lifetime commission total.
-public final class MarketMakerAccount {
+public final class MarketMakerAccount implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     private double balance;
     private double totalCommissionCollected;

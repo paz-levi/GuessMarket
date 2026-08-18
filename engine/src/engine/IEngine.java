@@ -8,6 +8,7 @@ import dto.TradeConfirmationDto;
 import exception.EventNotFoundException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
+import exception.StateFileException;
 import exception.XmlValidationException;
 
 import engine.impl.EngineImpl;
@@ -36,4 +37,10 @@ public interface IEngine {
     // Declares the winning option, settles payouts, and returns the event's final settled state.
     EventStatusDto closeEvent(int eventId, int winningOptionNumber)
             throws EventNotFoundException, IllegalTradeException, InvalidCommandStateException;
+
+    // Serializes the full current state (every event, all trade history, account balances) to a save-state file.
+    void saveState(String filePath) throws InvalidCommandStateException, StateFileException;
+
+    // Deserializes a previously saved state file, fully replacing the current in-memory state on success.
+    void loadState(String filePath) throws StateFileException;
 }

@@ -20,6 +20,10 @@ flowchart TD
             subgraph TRADING["engine.impl.trading"]
                 TradeExecutor["TradeExecutor"]
             end
+            subgraph STATE["engine.impl.state"]
+                StateFileManager["StateFileManager"]
+                EngineStateSnapshot["EngineStateSnapshot"]
+            end
         end
 
         subgraph DOMAIN["engine.domain (ui-inaccessible)"]
@@ -48,6 +52,7 @@ flowchart TD
             EventNotFoundException["EventNotFoundException"]
             IllegalTradeException["IllegalTradeException"]
             InvalidCommandStateException["InvalidCommandStateException"]
+            StateFileException["StateFileException"]
         end
     end
 
@@ -64,7 +69,10 @@ flowchart TD
     TradeExecutor -->|"mutates"| Event
     EngineImpl -->|"maps Event to"| DTO
     EngineImpl -->|"throws"| EXC
-    Main -->|"loadEventsFile()/listEvents()/getEventStatus()/participateInEvent()/closeEvent()"| IEngine
+    EngineImpl -->|"saveState()/loadState() delegate to"| StateFileManager
+    StateFileManager -->|"serializes/deserializes"| EngineStateSnapshot
+    EngineStateSnapshot --> Event
+    Main -->|"loadEventsFile()/listEvents()/getEventStatus()/participateInEvent()/closeEvent()/saveState()/loadState()"| IEngine
     Main -->|"catches"| EXC
     Main -->|"reads/prints"| DTO
 ```
@@ -93,6 +101,11 @@ flowchart TD
   `participateInEvent`'s third parameter was fixed from the skeleton stage's `double amount`
   to `int shareQuantity` while implementing it — the spec's third argument is a share count,
   not a dollar figure, and nothing depended on the old signature yet.
+  **Save/Load-State bonus stage:** two methods added, `saveState(String filePath)` and
+  `loadState(String filePath)`, for the bonus feature that persists the *entire* live system
+  (every event, all trade history, account balances) to a file of the engine's own choosing —
+  explicitly distinct from `loadEventsFile`'s XML format. Both throw `StateFileException`;
+  `saveState` also throws `InvalidCommandStateException` (nothing to save if nothing is loaded).
 
 ### `engine.impl` package
 
@@ -163,6 +176,8 @@ the intentionally top-level, `ui`-facing packages.
   runtime). Referenced by `Trade.option` to record which option a purchase was for.
   `addShares()` is called by `engine.impl.trading.TradeExecutor.participate()`; nothing
   validates its input (must be positive) since that's `TradeExecutor`'s job, not this class's.
+  **Save/Load-State bonus stage:** now `implements Serializable` (+ `serialVersionUID`), so
+  `engine.impl.state.StateFileManager` can write/read it as part of an `Event`'s object graph.
 
 #### `Trade` (`engine/src/engine/domain/Trade.java`)
 - **What it is:** A record of one executed purchase — which option, how much, at what
@@ -176,6 +191,11 @@ the intentionally top-level, `ui`-facing packages.
   fields, so "price paid" in trade-history display can mean share-cost-alone without losing
   the other two numbers. Mapped to `dto.TradeRecordDto` by `EngineImpl.toTradeRecordDto()`
   (never handed to `ui` directly, per the deep-DTO rule in CLAUDE.md Section 2).
+  **Save/Load-State bonus stage:** now `implements Serializable` (+ `serialVersionUID`); its
+  `option` field aliases the same `EventOption` instance the owning `Event` holds, and Java's
+  built-in serialization preserves that reference identity across a save/load round-trip
+  (verified explicitly by `SaveLoadStateTest.roundTripsEveryFieldAndPreservesObjectIdentity()`).
+  `timestamp`'s type, `java.time.LocalDateTime`, is already `Serializable` in the JDK.
 
 #### `MarketMakerAccount` (`engine/src/engine/domain/MarketMakerAccount.java`)
 - **What it is:** A small class holding two numbers: the account's current balance and its
@@ -184,6 +204,9 @@ the intentionally top-level, `ui`-facing packages.
   into, commissions are collected into, and payouts are made from; keeping the running
   balance and the lifetime commission total as separate fields matches the "event trading
   status" view needing to show both independently.
+  **Save/Load-State bonus stage:** now `implements Serializable` (+ `serialVersionUID`); a
+  negative `balance` serializes/deserializes as an ordinary `double`, no special handling
+  needed.
 - **What it connects to:** Held as the `marketMakerAccount` field on `Event`. `credit()` and
   `addCommissionCollected()` are called by `engine.impl.trading.TradeExecutor.participate()`
   on every purchase; `debit()` is called by `TradeExecutor.close()` for the winning payout.
@@ -219,6 +242,11 @@ the intentionally top-level, `ui`-facing packages.
   it to `CLOSED` and recording `winningOption` (a new field, `null` until `close()` runs, read
   back by `getWinningOption()`) — called exclusively by
   `engine.impl.trading.TradeExecutor.close()`.
+  **Save/Load-State bonus stage:** now `implements Serializable` (+ `serialVersionUID`), the
+  key retrofit that makes the save/load-state bonus feature possible. `winningOption` aliases
+  the same instance as `optionOne` or `optionTwo` (set by `close()`), and this reference
+  identity survives a save/load round-trip intact because
+  `engine.impl.state.StateFileManager` writes an entire event graph in one `writeObject` call.
 
 ### `engine.domain.lmsr` package
 
@@ -317,6 +345,63 @@ the intentionally top-level, `ui`-facing packages.
   and — for the overflow guard specifically — both the exact 100,000-share/b=100 case that
   surfaced the bug and a just-under-the-threshold case confirming legitimate large purchases
   still work), run by the same `test.bat` as `LmsrMathTest`.
+  **Save/Load-State bonus stage:** `saveState()` guards on `events.isEmpty()` (same
+  `InvalidCommandStateException` + `NO_FILE_LOADED_MESSAGE` pattern `findEvent()` already uses),
+  then delegates the actual serialization to `engine.impl.state.StateFileManager.save()`.
+  `loadState()` follows `loadEventsFile()`'s exact atomic-replace shape: `StateFileManager.load()`
+  builds the entire new `Map<Integer, Event>` off to the side and throws before returning
+  anything on any failure, so `EngineImpl` only clears and repopulates its live `events` field
+  after the new state is fully known-good — a failed load never touches previously-loaded state,
+  identical guarantee to Command 1.
+
+### `engine.impl.state` package
+
+#### `EngineStateSnapshot` (`engine/src/engine/impl/state/EngineStateSnapshot.java`)
+- **What it is:** A small package-private `Serializable` class holding one field: the full list
+  of currently-loaded events.
+- **Why it exists:** The save/load-state bonus feature needs *something* to hand
+  `ObjectOutputStream.writeObject()`. Wrapping the event list in its own class, rather than
+  serializing `EngineImpl`'s live `Map<Integer, Event>` field directly, keeps the on-disk format
+  decoupled from `EngineImpl`'s internal representation — e.g. a future format-version field
+  could be added here without `EngineImpl` needing to change at all. Package-private since
+  nothing outside `engine.impl.state` — not even `EngineImpl` — ever needs to see it directly.
+- **What it connects to:** Built and written by `StateFileManager.save()`; read back and
+  unwrapped by `StateFileManager.load()`. Holds `List<engine.domain.Event>` directly (not
+  DTOs) — safe here specifically because this class never crosses the `engine`→`ui` boundary,
+  unlike every DTO in the `dto` package.
+
+#### `StateFileManager` (`engine/src/engine/impl/state/StateFileManager.java`)
+- **What it is:** A class with no instances (only `static` methods) that saves the full engine
+  state to a file and loads it back — the save/load-state bonus feature's entire file-handling
+  pipeline in one place, mirroring `engine.impl.xml.EventsFileLoader`'s shape exactly (a pure
+  builder; never touches `EngineImpl`'s live state itself).
+- **Why it exists:** Keeps `EngineImpl.saveState()`/`loadState()` thin one-line delegators, same
+  reasoning as `EventsFileLoader` for `loadEventsFile()`. Uses Java's built-in
+  `ObjectOutputStream`/`ObjectInputStream` (the domain model is already a clean POJO graph with
+  no static/global state, which is what makes this lightweight) rather than a hand-rolled
+  format — and does so for a concrete reason, not just convenience: `Event.winningOption` and
+  each `Trade.option` are the *same instance* as one of the event's own two `EventOption`
+  fields, and serializing the whole graph in a single `writeObject` call preserves that
+  reference identity automatically via Java's internal object-handle table. A hand-rolled
+  format would have had to reconstruct that aliasing manually.
+- **What it connects to:** `save(Map<Integer, Event>, String filePath)` is called by
+  `EngineImpl.saveState()`; wraps the event map in one `EngineStateSnapshot` and writes it in a
+  single `writeObject` call to `<filePath>.gmstate` (the `STATE_FILE_EXTENSION` constant — the
+  user never types or sees this extension, per the bonus spec's "path without extension"
+  requirement; the engine appends it). `load(String filePath)` is called by `EngineImpl.loadState()`;
+  checks the file exists, reads back one object, and defensively confirms (via `instanceof`) it's
+  actually an `EngineStateSnapshot` before rebuilding a fresh `Map<Integer, Event>` keyed by
+  `event.getId()` — never touching any caller state itself. Both directions wrap every failure
+  (missing file, blank path, any `IOException`/`ClassNotFoundException` from the underlying
+  streams) into a specific `exception.StateFileException` message quoting the resolved path.
+  Each stream (`FileOutputStream`/`FileInputStream`) is declared as its own try-with-resources
+  variable rather than inlined into the `ObjectOutputStream`/`ObjectInputStream` constructor
+  call — a real bug found while testing this stage: if the wrapping stream's constructor itself
+  throws (e.g. `ObjectInputStream` rejecting a corrupt stream header), an inlined inner stream
+  is never assigned anywhere and therefore never closed, which left the file locked on Windows
+  (a JUnit `@TempDir` cleanup failure surfaced this during `test.bat`). Declaring both streams
+  as separate resources guarantees the inner one still closes even when the outer constructor
+  fails.
 
 ### `dto` package
 
@@ -482,6 +567,20 @@ the intentionally top-level, `ui`-facing packages.
   event data. Thrown by `EngineImpl.findEvent()` (and therefore also by `findActiveEvent()`,
   which calls it first) and directly by `listEvents()`, both using the same
   `NO_FILE_LOADED_MESSAGE` constant so the message is identical everywhere it's thrown.
+
+#### `StateFileException` (`engine/src/exception/StateFileException.java`)
+- **What it is:** A specific failure type covering the entire save/load-state bonus
+  feature's file-handling category: a save that couldn't be written, or a load whose file is
+  missing, unreadable/corrupt, or doesn't contain a valid saved state.
+- **Why it exists:** None of the four pre-existing exception types fit — `XmlValidationException`'s
+  own doc comment scopes it to "a loaded events XML file," and the other three are about
+  event-lookup/trading, not file I/O. One new type, grouped by this failure category (not by
+  individual call site) per CLAUDE.md's own exception-design guidance, plays the same role for
+  save/load-state that `XmlValidationException` plays for XML loading.
+- **What it connects to:** Declared on `IEngine.saveState` and `IEngine.loadState`. Thrown
+  internally by `engine.impl.state.StateFileManager`'s save/load pipeline, wrapping every
+  underlying `IOException`/`ClassNotFoundException` with a specific message quoting the file
+  path; caught by `ui.Main`'s Commands 7/8 handlers, which print the message.
 
 ---
 

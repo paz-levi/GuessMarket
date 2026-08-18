@@ -17,11 +17,13 @@ import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
 import engine.domain.lmsr.LmsrMath;
+import engine.impl.state.StateFileManager;
 import engine.impl.trading.TradeExecutor;
 import engine.impl.xml.EventsFileLoader;
 import exception.EventNotFoundException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
+import exception.StateFileException;
 import exception.XmlValidationException;
 
 // The concrete implementation of IEngine; ui must depend on the IEngine interface, never on this class directly.
@@ -88,6 +90,23 @@ public class EngineImpl implements IEngine {
         Event event = findActiveEvent(eventId);
         TradeExecutor.close(event, winningOptionNumber);
         return toStatusDto(event);
+    }
+
+    // Serializes every currently loaded event (all trade history, account balances) to a save-state file.
+    @Override
+    public void saveState(String filePath) throws InvalidCommandStateException, StateFileException {
+        if (events.isEmpty()) {
+            throw new InvalidCommandStateException(NO_FILE_LOADED_MESSAGE);
+        }
+        StateFileManager.save(events, filePath);
+    }
+
+    // Deserializes a previously saved state file fully before touching any live state, then atomically replaces it on success.
+    @Override
+    public void loadState(String filePath) throws StateFileException {
+        Map<Integer, Event> loadedEvents = StateFileManager.load(filePath);
+        events.clear();
+        events.putAll(loadedEvents);
     }
 
     // Looks up an event by id; throws InvalidCommandStateException if no file has ever been loaded, else EventNotFoundException if the id is unknown.

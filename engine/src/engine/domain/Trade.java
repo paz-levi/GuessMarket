@@ -1,9 +1,12 @@
 package engine.domain;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
 // One executed purchase recorded in an event's trade history.
-public final class Trade {
+public final class Trade implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     private final EventOption option;
     private final double quantity;

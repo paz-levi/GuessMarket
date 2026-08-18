@@ -1,7 +1,11 @@
 package engine.domain;
 
+import java.io.Serializable;
+
 // One of an event's two GM-options (outcomes) that users can buy into.
-public final class EventOption {
+public final class EventOption implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     private final String name;
     private double sharesOutstanding = 0.0;
