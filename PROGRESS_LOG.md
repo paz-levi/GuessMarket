@@ -6,6 +6,21 @@ scannable in seconds.
 
 ---
 
+### `a120fd4` — 2026-08-18 — Add engine-level save/load system state (bonus)
+Engine half of the 5-point "Save and Load system state" bonus: `IEngine.saveState`/`loadState`,
+a new `engine.impl.state` package (`StateFileManager` + `EngineStateSnapshot`) using Java's
+built-in `Serializable`/`ObjectOutputStream`/`ObjectInputStream` (chosen because the domain
+graph's `winningOption`/`Trade.option` aliasing survives a single-graph serialization for free),
+`Event`/`EventOption`/`MarketMakerAccount`/`Trade` now `Serializable`, and a new
+`StateFileException`. `.gmstate` extension, appended internally. `loadState()` matches
+`loadEventsFile()`'s atomic-replace guarantee. Fixed a Windows file-lock bug found via testing
+(inlined `ObjectInputStream`/`ObjectOutputStream` constructor left the wrapped stream unclosed
+on a corrupt-header failure). `SaveLoadStateTest` round-trips a mixed active/closed fixture with
+trade history and a negative balance, asserting field equality plus reference-identity
+preservation, plus missing/corrupt-file rejection. Satisfies CLAUDE.md's bonus spec (full state,
+including history, to a non-XML format the engine owns end to end) and the module-isolation /
+exception-design / atomic-replace rules already established for Command 1.
+
 ### `deb9b06` — 2026-08-12 — Frame each event in list output, space out its fields (formatting only)
 Added a shorter `EVENT_SEPARATOR` (40 dashes, vs. the command-level `SEPARATOR`'s 60, kept
 visually distinct on purpose) framing each event in `printEventSummaries()`, plus a blank line
