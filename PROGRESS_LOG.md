@@ -6,6 +6,16 @@ scannable in seconds.
 
 ---
 
+### `e07211c` — 2026-08-18 — Add ui-level save/load system state commands (bonus)
+UI half of the save/load-state bonus: `handleSaveState`/`handleLoadState`, wired as new
+commands 6/7 (Save current state / Load saved state), with Exit renumbered from 6 to 8. Both
+handlers mirror `handleLoadEventsFile`'s shape (full-line path read, catch the engine's
+declared exceptions, print the message or a fixed success line) but skip a local extension
+check -- the user types the path without one and the engine appends `.gmstate` itself.
+Verified interactively: two separate `dist/ui.jar` runs (a fresh JVM for each) confirmed
+Command 3's full output (prices, shares, balances, commission, winning option, trade history)
+is identical after a save → process exit → relaunch → load cycle.
+
 ### `a120fd4` — 2026-08-18 — Add engine-level save/load system state (bonus)
 Engine half of the 5-point "Save and Load system state" bonus: `IEngine.saveState`/`loadState`,
 a new `engine.impl.state` package (`StateFileManager` + `EngineStateSnapshot`) using Java's
