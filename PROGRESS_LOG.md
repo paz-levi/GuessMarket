@@ -6,6 +6,47 @@ scannable in seconds.
 
 ---
 
+### `3123dc5` — 2026-08-30 — Wire real file loading: FileChooser + Task + IEngine.loadEventsFile, progress/error UI
+`MainViewController` now owns the Load File flow: `loadFileButton` opens a `FileChooser`
+(no default/typed directory, `*.xml` extension filter — the only way a path is ever obtained,
+per CLAUDE.md), then runs `IEngine.loadEventsFile` on a background `Task` (plus a short
+artificial delay so the new header `ProgressIndicator` is actually visible) against the one
+`IEngine` instance `GuessMarketApp` creates via `createDefault()` and injects into the
+controller once — never re-created per load. Success updates `filePathLabel` to the loaded
+path; failure shows a plain `Alert` with the exception's message (functional only, wording/
+styling deferred). Button and indicator are both bound to the `Task`'s `runningProperty()` so
+a load can't be double-triggered. Still no tab content wired. Satisfies CLAUDE.md's
+FileChooser/Task/progress-indicator hard rules; all 17 Ex1 tests unaffected.
+
+### `06329e5` — 2026-08-30 — Fix: EventsFileLoader NPE on Order Book events — reject with clear XmlValidationException instead of crashing
+Found by manual testing through the just-wired Load File flow against a real Ex2 sample file
+(`ex2-small.xml`), not caught by any existing automated test — worth noting since none of the
+4 lecturer-provided Ex2 sample files are pure LMSR; every one contains at least one Order Book
+event. `EventsFileLoader.buildEvent()` looked up `GM-LMSR` under `GM-method` unconditionally,
+then dereferenced the result — for an Order Book event that lookup returns `null`, so the very
+next line NPE'd instead of failing cleanly. One-line guard added: if no `GM-LMSR` child is
+found, throw `XmlValidationException` ("... does not use GM-LMSR; Order Book events are not
+yet supported in this build") instead of letting the NPE propagate. No `GM-order-book` parsing
+added — that's still a later stage. Verified against all 4 Ex2 sample files (`ex2-small`,
+`ex2-multiple`, `ex2-error-2`, `ex2-error-3`): each now fails with the clean message instead
+of crashing. All 17 Ex1 tests still pass, unchanged.
+
+### `22b4718` — 2026-08-30 — Add JavaFX SDK + Application skeleton (FXML/Controller), wire build/run scripts
+First JavaFX stage: `javafx-sdk/` (Windows x64, version 25, committed to git — relative paths
+throughout) plus `GuessMarketApp`/`MainViewController`/`MainView.fxml`/`styles.css` — an empty
+`BorderPane` skeleton (header bar + non-closable Events/Users tabs), no `FileChooser`/`Task`/
+`IEngine` wiring yet. `build.bat`/`run.bat`/`ui.iml` gained `--module-path`/`--add-modules
+javafx.controls,javafx.fxml`; `ui.Main` stays the active `Main-Class` and untouched. Found and
+fixed two real bugs during manual verification, not just the skeleton itself: (1) the Windows
+SDK zip splits native `.dll`s into `bin/`, separate from the jars in `lib/` (unlike Linux/Mac,
+which bundle them together) — `javafx.graphics` failed at startup with "no suitable pipeline
+found" until `run.bat` got an explicit `-Djava.library.path`; (2) `.gitignore`'s generic
+`bin/` rule (Eclipse template block) was silently excluding `javafx-sdk/bin/` — exactly the
+DLLs the first fix depends on — caught before committing, fixed with a `!javafx-sdk/bin/`
+negation, verified via `git check-ignore -v`. Satisfies CLAUDE.md's Ex2 JavaFX/resize/
+zero-third-party-styling rules and the spec's recommended build order (JavaFX skeleton before
+Users/Order Book); all 17 Ex1 tests still pass unchanged.
+
 ### `d77f8cf` — 2026-08-30 — docs: update CLAUDE.md for Exercise 2 scope, add exercise2-requirements.md
 Rewrote `CLAUDE.md` from its Ex1-scoped version to cover Exercise 2 (JavaFX GUI, multi-user
 accounts, Order Book) while carrying forward every still-valid Ex1 rule and correcting the
