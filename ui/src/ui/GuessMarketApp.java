@@ -6,6 +6,8 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
 
+import engine.IEngine;
+
 // The JavaFX entry point that will eventually replace ui.Main; kept alongside it until the new UI actually covers its functionality.
 public class GuessMarketApp extends Application {
 
@@ -17,12 +19,16 @@ public class GuessMarketApp extends Application {
         launch(args);
     }
 
-    // Loads the root layout from FXML and shows it; no screen content or IEngine wiring yet.
+    // Loads the root layout from FXML, hands the controller the one IEngine instance for the app's whole lifetime, and shows it.
     @Override
     public void start(Stage primaryStage) throws Exception {
+        IEngine engine = IEngine.createDefault();
+
         FXMLLoader loader = new FXMLLoader();
         loader.setLocation(GuessMarketApp.class.getResource("MainView.fxml"));
         Parent root = loader.load();
+        MainViewController controller = loader.getController();
+        controller.setEngine(engine);
 
         Scene scene = new Scene(root, INITIAL_WIDTH, INITIAL_HEIGHT);
         scene.getStylesheets().add(GuessMarketApp.class.getResource("styles.css").toExternalForm());

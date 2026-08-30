@@ -3,13 +3,14 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ProgressIndicator?>
 <?import javafx.scene.control.Tab?>
 <?import javafx.scene.control.TabPane?>
 <?import javafx.scene.layout.BorderPane?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.Pane?>
 
-<!-- Root layout skeleton: shared header (Load File button + current-file label) over the Events/Users tab structure. No content wired yet. -->
+<!-- Root layout: shared header (Load File button + current-file label + load progress indicator) over the Events/Users tab structure. Tab content still empty. -->
 <BorderPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
             fx:controller="ui.MainViewController">
     <top>
@@ -19,6 +20,8 @@
             </padding>
             <Button fx:id="loadFileButton" text="Load File" />
             <Label fx:id="filePathLabel" text="No file loaded" />
+            <ProgressIndicator fx:id="loadProgressIndicator" prefWidth="20" prefHeight="20"
+                                visible="false" managed="false" />
         </HBox>
     </top>
     <center>
