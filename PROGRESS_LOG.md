@@ -6,6 +6,35 @@ scannable in seconds.
 
 ---
 
+### `d77f8cf` — 2026-08-30 — docs: update CLAUDE.md for Exercise 2 scope, add exercise2-requirements.md
+Rewrote `CLAUDE.md` from its Ex1-scoped version to cover Exercise 2 (JavaFX GUI, multi-user
+accounts, Order Book) while carrying forward every still-valid Ex1 rule and correcting the
+file against this repo's actual `ARCHITECTURE.md`/source rather than a generic template. Added
+` docs-reference/exercise2-requirements.md` (spec v3's Ex2 functional requirements: file
+loading, Users/MM screens, event lifecycle, resize, bonuses, submission), giving the skeleton
+stage a checked reference beyond `CLAUDE.md`'s own summary. Satisfies CLAUDE.md's own
+Section 0 "source of truth" layering rule — one general-requirements file per exercise, kept
+in the space-prefixed ` docs-reference` folder.
+
+### `e5ff4fe` — 2026-08-30 — Add Ex2 skeleton: 10 new dto types, 3 new exception types, extend IEngine (5 files modified)
+Ex2 skeleton stage per CLAUDE.md Section 6: 10 new `dto` types (`TradingMethod`, `OrderSide`,
+`UserSummaryDto`, `UserDetailDto`, `UserEventParticipationDto`, `OrderDto`,
+`SubmitOrderRequestDto`, `OrderBookSnapshotDto`, `ParticipantDto`, `EventFilterDto`) and 3 new
+`exception` types (`UserBlockedException`, `UnauthorizedMarketMakerException`,
+`UserNotFoundException`) as empty shells; the other 6 CLAUDE.md-listed exception triggers
+folded into the existing `XmlValidationException`/`IllegalTradeException` instead, matching
+how every other load-time/trading validation failure already works. Extended `EventStatus`
+with `NOT_STARTED`, widened `EventSummaryDto`/`EventStatusDto` with a `tradingMethod` field
+(plus `orderBooks`/`participants` on the latter, empty for LMSR), and added 5 `IEngine` method
+stubs (`listUsers`, `getUser`, `openEvent`, `submitOrder`, an `EventFilterDto`-taking
+`listEvents` overload) backed by `EngineImpl` throwing `UnsupportedOperationException` — zero
+business logic, zero JavaFX, zero new dependencies. `createDefault()`/`saveState()`/
+`loadState()` and all 7 pre-existing `IEngine` signatures (bar the sanctioned `listEvents`
+overload) are untouched; `ui.Main` was not modified and still compiles. Build and all 17
+existing Ex1 tests pass unchanged.
+
+---
+
 ### `e07211c` — 2026-08-18 — Add ui-level save/load system state commands (bonus)
 UI half of the save/load-state bonus: `handleSaveState`/`handleLoadState`, wired as new
 commands 6/7 (Save current state / Load saved state), with Exit renumbered from 6 to 8. Both
