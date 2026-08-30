@@ -1,0 +1,11 @@
+/* Hand-written CSS baseline (plain JavaFX -fx-* syntax, no third-party theming library) — real colors/skins come later. */
+
+.root {
+    -fx-font-size: 13px;
+}
+
+.header-bar {
+    -fx-alignment: center-left;
+    -fx-border-color: transparent transparent lightgray transparent;
+    -fx-border-width: 0 0 1 0;
+}

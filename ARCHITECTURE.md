@@ -6,7 +6,9 @@ add entries here, existing entries are not rewritten away. Grouped by module.
 ```mermaid
 flowchart TD
     subgraph UI["ui module"]
-        Main["Main (main, menu loop)"]
+        Main["Main (console UI, active entry point)"]
+        GuessMarketApp["GuessMarketApp (JavaFX, not yet active)"]
+        MainViewController["MainViewController"]
     end
 
     subgraph ENGINE["engine module"]
@@ -88,6 +90,8 @@ flowchart TD
     Main -->|"loadEventsFile()/listEvents()/getEventStatus()/participateInEvent()/closeEvent()/saveState()/loadState()"| IEngine
     Main -->|"catches"| EXC
     Main -->|"reads/prints"| DTO
+    GuessMarketApp -->|"FXMLLoader.load() builds"| MainViewController
+    GuessMarketApp -.->|"not yet calls"| IEngine
 ```
 
 ---
@@ -842,3 +846,81 @@ the intentionally top-level, `ui`-facing packages.
   the specific exceptions those methods declare (`InvalidCommandStateException`/
   `StateFileException` for save, `StateFileException` alone for load), printing the message on
   failure or a fixed confirmation string on success — identical pattern to every other handler.
+
+#### `GuessMarketApp` (`ui/src/ui/GuessMarketApp.java`) — Ex2 JavaFX skeleton stage, new
+- **What it is:** A `javafx.application.Application` subclass — the project's first JavaFX
+  entry point. `main()` calls the inherited `launch(args)`; `start(Stage)` loads
+  `MainView.fxml` via an `FXMLLoader` instance (`setLocation()` + `load()`, not the static
+  `FXMLLoader.load(URL)` shortcut, specifically so `getController()` stays available once a
+  later step needs it), wraps the loaded root in a `Scene`, applies `styles.css`, sets the
+  window title, and shows the `Stage`. `Stage.resizable` is left at its default `true`
+  explicitly (one-line comment), never set `false` — CLAUDE.md's resize rule calls out
+  disabling it as not an acceptable workaround.
+- **Why it exists:** Ex2's spec requires the whole system to run as a JavaFX GUI. This class
+  is deliberately separate from `ui.Main` (not a rewrite of it) so the working Ex1 console UI
+  stays available as a reference and a fallback until the JavaFX side actually covers its
+  functionality — per the explicit instruction to check before touching `Main`. No screen
+  content or `IEngine` call exists yet; this stage only proves the JavaFX/FXML/CSS plumbing
+  compiles, packages, and shows a window.
+- **What it connects to:** Loads `ui/resources/ui/MainView.fxml` (packaged into `ui.jar`
+  alongside the compiled classes by `build.bat`'s new resource-copy step) and
+  `ui/resources/ui/styles.css`. `ui-manifest.txt`'s `Main-Class` still points at `ui.Main`, not
+  this class — `run.bat` therefore still launches the console UI; this class is currently only
+  reachable via a direct `java ... ui.GuessMarketApp` invocation for manual verification, until
+  a later step retires `ui.Main` and flips the manifest over.
+
+#### `MainViewController` (`ui/src/ui/MainViewController.java`) — Ex2 JavaFX skeleton stage, new
+- **What it is:** `MainView.fxml`'s controller class (`fx:controller="ui.MainViewController"`),
+  currently holding only `@FXML`-injected references to the header's `Button`
+  (`loadFileButton`) and `Label` (`filePathLabel`) — no event handlers, no `initialize()`
+  logic yet.
+- **Why it exists:** Proves the FXML↔controller wiring works end to end now (matching the
+  `FXMLLoader`/controller pattern taught in class), ahead of the next step wiring the actual
+  `FileChooser`/load behavior onto `loadFileButton`.
+- **What it connects to:** Instantiated automatically by `FXMLLoader` while loading
+  `MainView.fxml`; will be reused by `GuessMarketApp` (via `loader.getController()`) once
+  event-handling logic is added in a later step.
+
+#### `MainView.fxml` (`ui/resources/ui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
+- **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +
+  "No file loaded" label) on top, and a `TabPane` with two non-closable, currently-empty tabs
+  ("Events", "Users") in the center — the shared-header-over-tabs structure described in
+  ` docs-reference/exercise2-requirements.md`'s Users/Events screen sections.
+- **Why it exists:** Establishes the app's top-level screen structure before any real content
+  exists, so later steps only need to fill in each tab's content rather than also designing
+  the shared chrome around it.
+- **What it connects to:** Loaded by `GuessMarketApp.start()`; its `fx:controller` binds it to
+  `MainViewController`. Not yet reachable from `IEngine` in any way.
+
+#### `styles.css` (`ui/resources/ui/styles.css`) — Ex2 JavaFX skeleton stage, new
+- **What it is:** A minimal hand-written CSS file (plain JavaFX `-fx-*` syntax) — a base font
+  size and a bottom border on the header bar. No real color scheme yet.
+- **Why it exists:** Proves `scene.getStylesheets().add(...)` is wired correctly before any
+  screen's real visual design exists, per CLAUDE.md's default zero-third-party-library styling
+  plan (a hand-written stylesheet, not an external theming framework).
+- **What it connects to:** Added to the `Scene` by `GuessMarketApp.start()`. Its
+  `.header-bar` selector targets `MainView.fxml`'s header `HBox` (`fx:id="headerBar"`,
+  `styleClass="header-bar"`).
+
+**New build-tooling wiring, Ex2 JavaFX skeleton stage:** the JavaFX SDK lives at
+`javafx-sdk/` in the repo root (committed to git, not gitignored — the submission is a zip,
+not a git clone, so keeping it out of version control would only risk it being forgotten
+under deadline pressure; ~80-100MB is well within normal repo-size norms). Version pinned to
+JavaFX 25, matching this project's own `--release 25` javac target and `JDK_25` language
+level 1:1. `build.bat`'s `ui` compile step gained
+`--module-path javafx-sdk\lib --add-modules javafx.controls,javafx.fxml`, plus a new
+`xcopy`-based step copying `ui\resources\*` into `out\ui\` right after compiling (`javac`
+never touches non-`.java` files, so without this the FXML/CSS would silently never reach
+`ui.jar`). `run.bat` gained the same `--module-path`/`--add-modules` flags on its `java -jar`
+invocation, plus `-Djava.library.path="%~dp0javafx-sdk\bin"` — the Windows JavaFX SDK zip
+splits its jars (`lib/`) from its native `.dll`s (`bin/`), unlike the Linux/Mac SDKs which
+bundle natives directly alongside the jars in `lib/`; without pointing `java.library.path` at
+`bin/` explicitly, `javafx.graphics` fails at startup with "no suitable pipeline found" even
+though compilation succeeds fine (javac only needs the jars). Confirmed by hitting this
+exact failure during manual verification and fixing it. These flags are a no-op for the
+still-active `ui.Main`, but are what makes the new classes reachable for manual verification.
+`ui/ui.iml` gained a `resources` source folder and a module-library `orderEntry` pointing at
+the 4 core JavaFX jars via relative `$MODULE_DIR$/../javafx-sdk/lib` paths (IDE-only
+convenience — `build.bat` never reads `.iml` files, so this can't affect the command-line
+build either way). All paths are relative throughout, so the wiring works unchanged after the
+grader unzips the submission on a machine with no JavaFX pre-installed.

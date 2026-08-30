@@ -17,9 +17,13 @@ del engine-sources.txt
 
 echo Compiling ui module...
 dir /s /b ui\src\*.java > ui-sources.txt
-javac --release 25 -d out\ui -cp out\engine @ui-sources.txt
+javac --release 25 --module-path javafx-sdk\lib --add-modules javafx.controls,javafx.fxml -d out\ui -cp out\engine @ui-sources.txt
 if errorlevel 1 goto :error
 del ui-sources.txt
+
+echo Copying ui resources...
+xcopy /s /y ui\resources\* out\ui\ >nul
+if errorlevel 1 goto :error
 
 echo Packaging engine.jar...
 jar cf dist\engine.jar -C out\engine .
