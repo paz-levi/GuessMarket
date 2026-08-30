@@ -126,6 +126,10 @@ public final class EventsFileLoader {
 
         Element methodElement = firstChildElementByTag(eventElement, TAG_GM_METHOD);
         Element lmsrElement = firstChildElementByTag(methodElement, TAG_GM_LMSR);
+        if (lmsrElement == null) {
+            throw new XmlValidationException("Event id " + id + " does not use GM-LMSR; "
+                    + "Order Book events are not yet supported in this build.");
+        }
         int liquidityParameter = parseIntContent(firstChildElementByTag(lmsrElement, TAG_B));
         MarketMakerAccount marketMakerAccount = new MarketMakerAccount(computeInitialSubsidy(liquidityParameter));
 
