@@ -5,11 +5,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import dto.EventFilterDto;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
 import dto.EventStatus;
+import dto.OrderDto;
+import dto.SubmitOrderRequestDto;
 import dto.TradeConfirmationDto;
 import dto.TradeRecordDto;
+import dto.TradingMethod;
+import dto.UserDetailDto;
+import dto.UserSummaryDto;
 import engine.IEngine;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
@@ -24,6 +30,9 @@ import exception.EventNotFoundException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
 import exception.StateFileException;
+import exception.UnauthorizedMarketMakerException;
+import exception.UserBlockedException;
+import exception.UserNotFoundException;
 import exception.XmlValidationException;
 
 // The concrete implementation of IEngine; ui must depend on the IEngine interface, never on this class directly.
@@ -56,9 +65,11 @@ public class EngineImpl implements IEngine {
 
     // Maps a domain Event to the DTO shape ui is allowed to see.
     private static EventSummaryDto toSummaryDto(Event event) {
+        // Every event EngineImpl currently builds is LMSR-only pre-Ex2; Order Book events will set this properly once that loading path exists.
         return new EventSummaryDto(event.getId(), event.getName(), event.getDescription(),
                 event.getCommissionRate(), toDtoCommissionMode(event.getCommissionMode()),
-                event.getOptionOne().getName(), event.getOptionTwo().getName(), event.getStatus());
+                event.getOptionOne().getName(), event.getOptionTwo().getName(), event.getStatus(),
+                TradingMethod.LMSR);
     }
 
     // Maps the domain-internal commission mode enum to the dto-level one ui is allowed to see.
@@ -140,6 +151,7 @@ public class EngineImpl implements IEngine {
         MarketMakerAccount account = event.getMarketMakerAccount();
         EventOption winningOption = event.getWinningOption();
 
+        // Every event EngineImpl currently builds is LMSR-only pre-Ex2, so the order-book fields stay empty.
         return new EventStatusDto(
                 event.getId(), event.getName(), event.getStatus(),
                 optionOne.getName(), optionTwo.getName(),
@@ -147,7 +159,8 @@ public class EngineImpl implements IEngine {
                 optionOne.getSharesOutstanding(), optionTwo.getSharesOutstanding(),
                 account.getBalance(), account.getTotalCommissionCollected(),
                 winningOption != null ? winningOption.getName() : null,
-                toTradeRecordDtosNewestFirst(event));
+                toTradeRecordDtosNewestFirst(event),
+                TradingMethod.LMSR, List.of(), List.of());
     }
 
     // Maps an event's trade history to DTOs, newest-first (reversing the chronological storage order).
@@ -171,5 +184,37 @@ public class EngineImpl implements IEngine {
         double shareCost = trade.getPricePerShare() * trade.getQuantity();
         return new TradeConfirmationDto(trade.getOption().getName(), trade.getQuantity(), shareCost,
                 trade.getCommissionPaid(), trade.getTotalPaid(), toStatusDto(event));
+    }
+
+    // Not yet implemented — Ex2 skeleton stage stub.
+    @Override
+    public List<UserSummaryDto> listUsers() throws InvalidCommandStateException {
+        throw new UnsupportedOperationException("listUsers not yet implemented");
+    }
+
+    // Not yet implemented — Ex2 skeleton stage stub.
+    @Override
+    public UserDetailDto getUser(String username) throws InvalidCommandStateException, UserNotFoundException {
+        throw new UnsupportedOperationException("getUser not yet implemented");
+    }
+
+    // Not yet implemented — Ex2 skeleton stage stub.
+    @Override
+    public void openEvent(int eventId, String username)
+            throws EventNotFoundException, InvalidCommandStateException, UnauthorizedMarketMakerException, IllegalTradeException {
+        throw new UnsupportedOperationException("openEvent not yet implemented");
+    }
+
+    // Not yet implemented — Ex2 skeleton stage stub.
+    @Override
+    public OrderDto submitOrder(SubmitOrderRequestDto request)
+            throws EventNotFoundException, InvalidCommandStateException, IllegalTradeException, UserBlockedException {
+        throw new UnsupportedOperationException("submitOrder not yet implemented");
+    }
+
+    // Not yet implemented — Ex2 skeleton stage stub.
+    @Override
+    public List<EventSummaryDto> listEvents(EventFilterDto filter) throws InvalidCommandStateException {
+        throw new UnsupportedOperationException("listEvents(EventFilterDto) not yet implemented");
     }
 }

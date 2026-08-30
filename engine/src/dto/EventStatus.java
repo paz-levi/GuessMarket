@@ -1,7 +1,8 @@
 package dto;
 
-// The lifecycle state of an event: ACTIVE on load, CLOSED once settled (2-value for Ex1, forward-compatible with a 3rd value later).
+// The lifecycle state of an event: NOT_STARTED on load, ACTIVE once its MM opens it, CLOSED once settled.
 public enum EventStatus {
+    NOT_STARTED,
     ACTIVE,
     CLOSED
 }

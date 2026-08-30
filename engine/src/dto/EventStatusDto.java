@@ -2,7 +2,7 @@ package dto;
 
 import java.util.List;
 
-// The full "event trading status" view: prices, current holdings, MM account state, commission collected, and trade history.
+// The full "event trading status" view: prices, current holdings, MM account state, commission collected, trade history (LMSR), and order books/participants (Order Book; empty for LMSR).
 public record EventStatusDto(
         int eventId,
         String eventName,
@@ -16,6 +16,9 @@ public record EventStatusDto(
         double marketMakerBalance,
         double totalCommissionCollected,
         String winningOptionName,
-        List<TradeRecordDto> tradeHistory
+        List<TradeRecordDto> tradeHistory,
+        TradingMethod tradingMethod,
+        List<OrderBookSnapshotDto> orderBooks,
+        List<ParticipantDto> participants
 ) {
 }

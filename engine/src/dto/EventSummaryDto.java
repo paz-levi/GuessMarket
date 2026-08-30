@@ -9,6 +9,7 @@ public record EventSummaryDto(
         CommissionMode commissionMode,
         String optionOneName,
         String optionTwoName,
-        EventStatus status
+        EventStatus status,
+        TradingMethod tradingMethod
 ) {
 }

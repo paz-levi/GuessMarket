@@ -44,6 +44,16 @@ flowchart TD
             TradeConfirmationDto["TradeConfirmationDto"]
             EventStatus["EventStatus"]
             DtoCommissionMode["CommissionMode"]
+            TradingMethod["TradingMethod"]
+            OrderSide["OrderSide"]
+            UserSummaryDto["UserSummaryDto"]
+            UserDetailDto["UserDetailDto"]
+            UserEventParticipationDto["UserEventParticipationDto"]
+            OrderDto["OrderDto"]
+            SubmitOrderRequestDto["SubmitOrderRequestDto"]
+            OrderBookSnapshotDto["OrderBookSnapshotDto"]
+            ParticipantDto["ParticipantDto"]
+            EventFilterDto["EventFilterDto"]
         end
 
         subgraph EXC["exception"]
@@ -53,6 +63,9 @@ flowchart TD
             IllegalTradeException["IllegalTradeException"]
             InvalidCommandStateException["InvalidCommandStateException"]
             StateFileException["StateFileException"]
+            UserBlockedException["UserBlockedException"]
+            UnauthorizedMarketMakerException["UnauthorizedMarketMakerException"]
+            UserNotFoundException["UserNotFoundException"]
         end
     end
 
@@ -106,6 +119,19 @@ flowchart TD
   (every event, all trade history, account balances) to a file of the engine's own choosing —
   explicitly distinct from `loadEventsFile`'s XML format. Both throw `StateFileException`;
   `saveState` also throws `InvalidCommandStateException` (nothing to save if nothing is loaded).
+  **Ex2 skeleton stage:** 5 new method stubs added — `listUsers()`, `getUser(String)`,
+  `openEvent(int, String)`, `submitOrder(SubmitOrderRequestDto)`, and an
+  `EventFilterDto`-taking overload of `listEvents()` (the original zero-arg `listEvents()` is
+  kept unchanged, since `ui.Main` still calls it) — empty bodies for now, implemented by
+  `EngineImpl` throwing `UnsupportedOperationException`. None of the 7 pre-existing methods'
+  signatures were touched. `openEvent` and `submitOrder` are the first methods to take an
+  explicit `username` caller-identity parameter, per CLAUDE.md Section 2's "every Ex2 user
+  action needs a username" rule — `participateInEvent`/`closeEvent` still lack one, a known,
+  deliberately deferred gap for the next stage (Section 6 forbids touching their signatures
+  this stage). `openEvent` and `submitOrder` deliberately reuse the existing
+  `IllegalTradeException`/`InvalidCommandStateException` for insufficient-funds/wrong-status
+  failures rather than introducing new exception types for cases the existing ones already
+  shape-match.
 
 ### `engine.impl` package
 
@@ -147,6 +173,13 @@ flowchart TD
   `Event.getWinningOption()` (`null` until `close()` sets it) for the DTO's
   `winningOptionName` field. Constructed by `ui.Main` exclusively through
   `IEngine.createDefault()`, never directly.
+  **Ex2 skeleton stage:** `toSummaryDto()` and `toStatusDto()` each gained one extra
+  hardcoded argument (`TradingMethod.LMSR`, plus `List.of()` twice for `toStatusDto()`'s new
+  `orderBooks`/`participants` fields) — a mechanical compile-fix forced by `EventSummaryDto`/
+  `EventStatusDto` gaining fields, not a logic change; every event `EngineImpl` currently
+  builds is still LMSR-only. 5 new `@Override` stubs added (`listUsers()`, `getUser()`,
+  `openEvent()`, `submitOrder()`, `listEvents(EventFilterDto)`), each throwing
+  `UnsupportedOperationException` — no business logic yet.
 
 ### `engine.domain` package
 
@@ -417,6 +450,10 @@ the intentionally top-level, `ui`-facing packages.
   itself (no separate domain-only enum, since this one has no behavior). Set when an
   `Event` is constructed (currently by `EngineImpl`'s hardcoded sample data; by XML loading
   once that exists); read by `ui.Main` to decide what to print.
+  **Ex2 skeleton stage:** gained the third value, `NOT_STARTED`, added first so the lifecycle
+  reads `NOT_STARTED → ACTIVE → CLOSED`. `EngineImpl.findActiveEvent()`'s existing
+  `!= ACTIVE` check (not `== CLOSED`) already rejects `NOT_STARTED` correctly without any
+  code change, exactly as anticipated when that check was originally written.
 
 #### `EventSummaryDto` (`engine/src/dto/EventSummaryDto.java`)
 - **What it is:** A "record" — a small immutable class that just holds a fixed set of
@@ -435,6 +472,10 @@ the intentionally top-level, `ui`-facing packages.
   by `ui.Main.printEventSummaries()`, which prints one full block per event, 1-based — reused
   as the pre-selection list for the "pick an event" step in later commands, since the spec
   cross-references "per Command 2's details" for those too.
+  **Ex2 skeleton stage:** gained a trailing `tradingMethod: TradingMethod` field (per the
+  Events screen's "by event type: LMSR or Order Book" filter/display requirement); forced
+  `EngineImpl.toSummaryDto()` to pass `TradingMethod.LMSR` explicitly (every event it builds
+  is still LMSR-only).
 
 #### `CommissionMode` (`engine/src/dto/CommissionMode.java`)
 - **What it is:** An enum with two values, `ON_PURCHASE` and `ON_CLOSE` — the dto-level
@@ -481,6 +522,13 @@ the intentionally top-level, `ui`-facing packages.
   re-derived at each call site. Its `tradeHistory` field is a `List<TradeRecordDto>`. Printed in
   full by `ui.Main.printEventStatus()` — Command 3's display, first wired this stage, reused
   as-is once Participate/Close hand it the same shape.
+  **Ex2 skeleton stage:** gained 3 trailing fields — `tradingMethod: TradingMethod`,
+  `orderBooks: List<OrderBookSnapshotDto>` (one per option), and
+  `participants: List<ParticipantDto>` — so the Events screen's unified "event detail view"
+  (one screen, content varies by type per exercise2-requirements.md) can come from this same
+  DTO/method rather than a second lookup. `EngineImpl.toStatusDto()` now passes
+  `TradingMethod.LMSR` and two empty lists for every (still LMSR-only) event it builds; both
+  lists stay empty for LMSR events once Order Book events exist too.
 
 #### `TradeConfirmationDto` (`engine/src/dto/TradeConfirmationDto.java`)
 - **What it is:** A record summarizing the outcome of one successful trade: which option was
@@ -496,6 +544,95 @@ the intentionally top-level, `ui`-facing packages.
   plus a `toStatusDto()` call on the same, now-mutated `Event`. Consumed by
   `ui.Main.printTradeConfirmation()`, which prints the breakdown fields directly and delegates
   its nested `eventStatus` straight to `printEventStatus()`.
+
+#### `TradingMethod` (`engine/src/dto/TradingMethod.java`) — Ex2 skeleton stage, new
+- **What it is:** An enum with two values, `LMSR` and `ORDER_BOOK`.
+- **Why it exists:** Ex2 adds a second trading mechanism alongside LMSR; every event needs an
+  unambiguous tag for which one it uses, for both filtering (Events screen) and display.
+- **What it connects to:** Held as a field on `EventSummaryDto` and `EventStatusDto`. Every
+  event `EngineImpl` currently builds is hardcoded to `LMSR`, until Order Book event
+  loading/creation exists.
+
+#### `OrderSide` (`engine/src/dto/OrderSide.java`) — Ex2 skeleton stage, new
+- **What it is:** An enum with two values, `BUY` and `SELL`.
+- **Why it exists:** An Order Book order needs an unambiguous direction; named `OrderSide`
+  (not the more generic `Side`) to avoid any conceptual clash with an event's two options.
+- **What it connects to:** Held as a field on `OrderDto` and `SubmitOrderRequestDto`.
+
+#### `UserSummaryDto` (`engine/src/dto/UserSummaryDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record holding a username, current balance, and whether the user is
+  currently blocked from further actions.
+- **Why it exists:** Lets a future `listUsers()` hand `ui` exactly what the Users screen's
+  list view needs, without exposing whatever internal user object the engine ends up using.
+- **What it connects to:** Will be returned inside a `List<UserSummaryDto>` by
+  `IEngine.listUsers()` (currently a stub).
+
+#### `UserEventParticipationDto` (`engine/src/dto/UserEventParticipationDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record describing one active event a user participates in — covers both
+  trading methods' detail requirements in one shape: `tradeHistory` (LMSR), per-option shares
+  held/amount paid and `profitOrLoss` (Order Book, `null` until closed), plus
+  `winningOptionName` (`null` until closed) shared by both.
+- **Why it exists:** exercise2-requirements.md's "User detail view" requires different
+  per-event detail depending on the event's trading method; one shape covers both rather than
+  two differently-named DTOs `ui` would need to type-switch on.
+- **What it connects to:** Held in the `activeParticipations` list field of `UserDetailDto`.
+
+#### `UserDetailDto` (`engine/src/dto/UserDetailDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record bundling a user's identity, balance, blocked state, and every
+  active event they participate in.
+- **Why it exists:** Lets a future `getUser()` hand `ui` everything the Users screen's detail
+  view needs in one call.
+- **What it connects to:** Will be returned by `IEngine.getUser(String)` (currently a stub).
+  Its `activeParticipations` field is a `List<UserEventParticipationDto>`.
+
+#### `OrderDto` (`engine/src/dto/OrderDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record describing one resting or placed order-book order: username, side,
+  quantity, price — kept to exactly these 4 fields (CLAUDE.md's literal field list), since
+  event/option context is always implicit from which option's book it's displayed inside.
+- **Why it exists:** Lets an order book view list resting bids/asks as structured data.
+- **What it connects to:** Held in the `restingBids`/`restingAsks` list fields of
+  `OrderBookSnapshotDto`; will also be `submitOrder()`'s return type once implemented.
+
+#### `SubmitOrderRequestDto` (`engine/src/dto/SubmitOrderRequestDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record bundling `submitOrder`'s parameters: username, eventId,
+  optionNumber, side, quantity, price.
+- **Why it exists:** Follows the same "DTO-as-multi-param-bundle" rule CLAUDE.md already
+  applies to `EventFilterDto`, rather than `submitOrder` taking 6 loose parameters. Unlike the
+  display-only `OrderDto`, submitting an order needs explicit event/option context since it
+  isn't implicit from any UI context yet at the engine-call boundary.
+- **What it connects to:** Will be `IEngine.submitOrder(SubmitOrderRequestDto)`'s single
+  parameter (currently a stub).
+
+#### `OrderBookSnapshotDto` (`engine/src/dto/OrderBookSnapshotDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record representing one option's order book directly (per CLAUDE.md's
+  literal "per option: resting orders + LAST/BID/ASK/MID/SPREAD" description — no extra
+  wrapper record needed): option name, resting bids/asks, and the 5 summary prices as boxed
+  `Double` (not primitive) since they can be genuinely unavailable (empty/one-sided book) —
+  the first nullable numeric fields anywhere in `dto`.
+- **Why it exists:** Gives the Order Book event detail view structured book data per option,
+  matching `order-book-appendix.md`'s LAST/BID/ASK/MID/SPREAD stats once that file exists.
+- **What it connects to:** Will be held in the `orderBooks` list field of `EventStatusDto`
+  (one entry per option; empty for LMSR events).
+
+#### `ParticipantDto` (`engine/src/dto/ParticipantDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record describing one Order Book participant row: username, and shares
+  held + current value for each of the event's two options.
+- **Why it exists:** exercise2-requirements.md's Order Book event detail view requires a
+  "per-participant view (name, share quantity and value held per option)" alongside the order
+  books themselves.
+- **What it connects to:** Will be held in the `participants` list field of `EventStatusDto`
+  (empty for LMSR events).
+
+#### `EventFilterDto` (`engine/src/dto/EventFilterDto.java`) — Ex2 skeleton stage, new
+- **What it is:** A record bundling the Events screen's 3 filter dimensions: trading method,
+  status, commission mode. A `null` field means "all" for that dimension.
+- **Why it exists:** Keeps the "show all" state out of `TradingMethod`/`EventStatus`/
+  `CommissionMode` themselves — an event's real status/method/mode can never legitimately be
+  "ALL", so a filter-only constant on those enums would let invalid states leak into
+  non-filter contexts. Scoping "all" to `null` on this DTO instead keeps the real enums clean.
+- **What it connects to:** Will be `IEngine.listEvents(EventFilterDto)`'s parameter (currently
+  a stub) — the original zero-arg `listEvents()` stays as an unmodified overload since
+  `ui.Main` still calls it.
 
 ### `exception` package
 
@@ -522,6 +659,11 @@ the intentionally top-level, `ui`-facing packages.
   `engine.impl.xml.EventsFileLoader`'s parse/validate pipeline; caught by `ui.Main`'s Command 1
   handler, which prints the message and never calls `engine` at all if its own cheap
   `.xml`-extension check fails first.
+  **Ex2 skeleton stage:** scope widened (specific message per case, no new type) to also cover
+  the 4 new Ex2 file-load checks: duplicate user name, non-positive `initial-cash`, an MM
+  referencing a non-existent event, and an event without exactly one MM — matching how every
+  other load-time validation failure already works here rather than introducing 4 new
+  exception classes for what's still fundamentally "the loaded file is invalid."
 
 #### `EventNotFoundException` (`engine/src/exception/EventNotFoundException.java`)
 - **What it is:** Thrown when a caller refers to an event id that doesn't exist in the
@@ -552,6 +694,11 @@ the intentionally top-level, `ui`-facing packages.
   the resulting `shares / liquidityParameter` past `MAX_SAFE_SHARES_OVER_LIQUIDITY`). Caught by
   `ui.Main`'s Commands 4/5, which print the message and return to the main menu rather than
   retrying the command.
+  **Ex2 skeleton stage:** scope widened (specific message per case, no new type) to also cover
+  an order priced above `d - 0.01` and trading attempted on a `NOT_STARTED`/`CLOSED` event —
+  both are "this trade/order request itself is invalid" failures, the same category this class
+  already owns; also reused (see `openEvent`'s note under `IEngine`) for an MM who can't
+  afford to open an event, the same shape as insufficient-funds already is for LMSR trades.
 
 #### `InvalidCommandStateException` (`engine/src/exception/InvalidCommandStateException.java`)
 - **What it is:** Thrown when a command that requires loaded event data is invoked before any
@@ -581,6 +728,31 @@ the intentionally top-level, `ui`-facing packages.
   internally by `engine.impl.state.StateFileManager`'s save/load pipeline, wrapping every
   underlying `IOException`/`ClassNotFoundException` with a specific message quoting the file
   path; caught by `ui.Main`'s Commands 7/8 handlers, which print the message.
+
+#### `UserBlockedException` (`engine/src/exception/UserBlockedException.java`) — Ex2 skeleton stage, new
+- **What it is:** Thrown when a user whose balance has gone negative attempts any further
+  action in the system.
+- **Why it exists:** exercise2-requirements.md's negative-balance rule requires a distinct,
+  catchable "you're blocked" outcome, separate from any specific trade/order being invalid.
+- **What it connects to:** Declared on `IEngine.submitOrder` (currently a stub); will need
+  adding to `participateInEvent`/`closeEvent` too once those gain a `username` parameter
+  (deferred — see `IEngine`'s Ex2 note above).
+
+#### `UnauthorizedMarketMakerException` (`engine/src/exception/UnauthorizedMarketMakerException.java`) — Ex2 skeleton stage, new
+- **What it is:** Thrown when a user who is not an event's assigned market maker tries to
+  open or close that event.
+- **Why it exists:** The engine, not just `ui`, must enforce MM-only actions (same
+  can't-be-trusted-alone principle as every other server-side check) — this is the dedicated
+  category for that specific authorization failure.
+- **What it connects to:** Declared on `IEngine.openEvent` (currently a stub); will need
+  adding to `closeEvent` too once it gains a `username` parameter (same deferred gap as above).
+
+#### `UserNotFoundException` (`engine/src/exception/UserNotFoundException.java`) — Ex2 skeleton stage, new
+- **What it is:** Thrown when a caller references a username that doesn't exist in the
+  currently loaded state — mirrors `EventNotFoundException` exactly.
+- **Why it exists:** `getUser(String)` needs the same "missing data" vs. "wrong state"
+  distinction `EventNotFoundException` already provides for event lookups.
+- **What it connects to:** Declared on `IEngine.getUser` (currently a stub).
 
 ---
 
