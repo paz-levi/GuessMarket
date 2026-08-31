@@ -11,10 +11,9 @@
 <?import javafx.scene.control.TabPane?>
 <?import javafx.scene.layout.BorderPane?>
 <?import javafx.scene.layout.HBox?>
-<?import javafx.scene.layout.Pane?>
 <?import javafx.scene.layout.VBox?>
 
-<!-- Root layout: shared header (Load File button + current-file label + load progress indicator) over the Events/Users tab structure. Events tab is a list/details split; Users tab still empty. -->
+<!-- Root layout: shared header (Load File button + current-file label + load progress indicator) over the Events/Users tab structure. Both tabs are list/details splits. -->
 <BorderPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
             fx:controller="ui.MainViewController">
     <top>
@@ -31,7 +30,7 @@
     <center>
         <TabPane fx:id="mainTabPane" tabClosingPolicy="UNAVAILABLE">
             <Tab text="Events">
-                <SplitPane dividerPositions="0.35">
+                <SplitPane dividerPositions="0.48">
                     <ListView fx:id="eventsListView" />
                     <ScrollPane fitToWidth="true">
                         <VBox fx:id="eventDetailsBox" spacing="10">
@@ -44,7 +43,17 @@
                 </SplitPane>
             </Tab>
             <Tab text="Users">
-                <Pane fx:id="usersTabContent" />
+                <SplitPane dividerPositions="0.48">
+                    <ListView fx:id="usersListView" />
+                    <ScrollPane fitToWidth="true">
+                        <VBox fx:id="userDetailsBox" spacing="10">
+                            <padding>
+                                <Insets top="14" right="14" bottom="14" left="14" />
+                            </padding>
+                            <Label text="Select a user to view details" />
+                        </VBox>
+                    </ScrollPane>
+                </SplitPane>
             </Tab>
         </TabPane>
     </center>

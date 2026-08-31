@@ -9,3 +9,8 @@
     -fx-border-color: transparent transparent lightgray transparent;
     -fx-border-width: 0 0 1 0;
 }
+
+.balance-badge {
+    -fx-font-weight: bold;
+    -fx-font-size: 15px;
+}

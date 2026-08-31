@@ -6,6 +6,7 @@ import java.util.Locale;
 
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
+import javafx.geometry.Pos;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
@@ -25,10 +26,13 @@ import dto.EventStatusDto;
 import dto.EventSummaryDto;
 import dto.TradeConfirmationDto;
 import dto.TradeRecordDto;
+import dto.UserDetailDto;
+import dto.UserEventParticipationDto;
+import dto.UserSummaryDto;
 import engine.IEngine;
 import exception.GuessMarketException;
 
-// Controller for MainView.fxml; owns the Load File flow, the Events list, event details + LMSR participation, and the shared header's state. Users tab still unwired.
+// Controller for MainView.fxml; owns the Load File flow, the Events list/details/participation, the Users list/details, and the shared header's state.
 public class MainViewController {
 
     // Artificial delay so the ProgressIndicator is visible even though the real load is fast — per CLAUDE.md's FileChooser/Task rule.
@@ -48,6 +52,12 @@ public class MainViewController {
 
     @FXML
     private VBox eventDetailsBox;
+
+    @FXML
+    private ListView<UserSummaryDto> usersListView;
+
+    @FXML
+    private VBox userDetailsBox;
 
     private IEngine engine;
 
@@ -70,6 +80,18 @@ public class MainViewController {
         eventsListView.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> {
             if (newSelection != null) {
                 showEventDetails(newSelection.eventId());
+            }
+        });
+        usersListView.setCellFactory(list -> new ListCell<>() {
+            @Override
+            protected void updateItem(UserSummaryDto user, boolean empty) {
+                super.updateItem(user, empty);
+                setText(empty || user == null ? null : formatUserSummary(user));
+            }
+        });
+        usersListView.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> {
+            if (newSelection != null) {
+                showUserDetails(newSelection.username());
             }
         });
     }
@@ -108,6 +130,7 @@ public class MainViewController {
         loadTask.setOnSucceeded(event -> {
             filePathLabel.setText(path);
             refreshEventsList();
+            refreshUsersList();
         });
         loadTask.setOnFailed(event -> showErrorAlert("Could not load the events file", loadTask.getException()));
 
@@ -127,6 +150,75 @@ public class MainViewController {
         }
     }
 
+    // Re-reads the full user list from the engine and refreshes the Users tab; called right after a successful load.
+    private void refreshUsersList() {
+        try {
+            List<UserSummaryDto> users = engine.listUsers();
+            usersListView.getItems().setAll(users);
+        } catch (GuessMarketException e) {
+            // Not expected to be reachable right after a successful load, but handled defensively rather than assumed away.
+            showErrorAlert("Could not list users", e);
+        }
+    }
+
+    // Looks up one user's full detail view and renders it in the right-hand details panel; called whenever the Users list selection changes.
+    private void showUserDetails(String username) {
+        try {
+            UserDetailDto detail = engine.getUser(username);
+            renderUserDetails(detail);
+        } catch (GuessMarketException e) {
+            showErrorAlert("Could not load user details", e);
+        }
+    }
+
+    // Rebuilds the Users tab's details panel from scratch: the account-balance badge, the events-participation list, and a
+    // read-only per-event sub-panel driven by whichever participation gets selected. No trade/buy actions from here yet.
+    private void renderUserDetails(UserDetailDto detail) {
+        Label balanceLabel = new Label("Balance: " + formatMoney(detail.balance()) + (detail.blocked() ? "  (BLOCKED)" : ""));
+        balanceLabel.getStyleClass().add("balance-badge");
+        HBox balanceBadge = new HBox(balanceLabel);
+        balanceBadge.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox singleEventDetailsBox = new VBox(10, new Label("Select an event above to view details"));
+
+        ListView<UserEventParticipationDto> participationListView = new ListView<>();
+        participationListView.getItems().setAll(detail.activeParticipations());
+        participationListView.setPrefHeight(150);
+        participationListView.setCellFactory(list -> new ListCell<>() {
+            @Override
+            protected void updateItem(UserEventParticipationDto participation, boolean empty) {
+                super.updateItem(participation, empty);
+                setText(empty || participation == null ? null : formatParticipation(participation));
+            }
+        });
+        participationListView.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> {
+            if (newSelection != null) {
+                showUserEventDetails(newSelection.eventId(), singleEventDetailsBox);
+            }
+        });
+
+        userDetailsBox.getChildren().setAll(
+                balanceBadge,
+                new Label("Events Participation / Owner:"),
+                participationListView,
+                new Separator(),
+                new Label("Single event details and trade:"),
+                singleEventDetailsBox
+        );
+    }
+
+    // Looks up one event's full status and renders it read-only (no participate form) in the given container; called
+    // whenever the Users tab's events-participation list selection changes.
+    private void showUserEventDetails(int eventId, VBox container) {
+        try {
+            EventStatusDto status = engine.getEventStatus(eventId);
+            container.getChildren().clear();
+            appendEventStatusDisplay(container, status);
+        } catch (GuessMarketException e) {
+            showErrorAlert("Could not load event details", e);
+        }
+    }
+
     // Looks up one event's full status and renders it in the right-hand details panel; called whenever the Events list selection changes.
     private void showEventDetails(int eventId) {
         try {
@@ -137,9 +229,19 @@ public class MainViewController {
         }
     }
 
-    // Rebuilds the details panel's content from scratch: prices/shares/account state, trade history, and the LMSR participate form.
+    // Rebuilds the details panel's content from scratch: the read-only status display plus the LMSR participate form.
     private void renderEventDetails(EventStatusDto status) {
-        eventDetailsBox.getChildren().setAll(
+        eventDetailsBox.getChildren().clear();
+        appendEventStatusDisplay(eventDetailsBox, status);
+        eventDetailsBox.getChildren().add(new Separator());
+        eventDetailsBox.getChildren().add(buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName()));
+    }
+
+    // Appends the read-only event status display (prices/shares, account state, winner-if-closed, trade history) to the
+    // given container. Shared by the Events tab's full detail panel (which also appends a participate form) and the
+    // Users tab's read-only per-event sub-panel (which deliberately doesn't).
+    private static void appendEventStatusDisplay(VBox container, EventStatusDto status) {
+        container.getChildren().addAll(
                 new Label(status.eventName() + "  (id " + status.eventId() + ")  —  " + status.status()),
                 new Label(status.optionOneName() + ": price " + formatMoney(status.optionOnePrice())
                         + ", shares " + formatMoney(status.optionOneShares())),
@@ -149,12 +251,10 @@ public class MainViewController {
                 new Label("Total commission collected: " + formatMoney(status.totalCommissionCollected()))
         );
         if (status.winningOptionName() != null) {
-            eventDetailsBox.getChildren().add(new Label("Winner: " + status.winningOptionName()));
+            container.getChildren().add(new Label("Winner: " + status.winningOptionName()));
         }
-        eventDetailsBox.getChildren().add(new Separator());
-        eventDetailsBox.getChildren().add(buildTradeHistorySection(status.tradeHistory()));
-        eventDetailsBox.getChildren().add(new Separator());
-        eventDetailsBox.getChildren().add(buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName()));
+        container.getChildren().add(new Separator());
+        container.getChildren().add(buildTradeHistorySection(status.tradeHistory()));
     }
 
     // Builds the trade-history block: a header plus one row per trade (already newest-first, per EventStatusDto's own contract), or a placeholder when empty.
@@ -239,6 +339,16 @@ public class MainViewController {
     // Small presentation helper, matching ui.Main's own formatCommissionMode wording.
     private static String formatCommissionMode(CommissionMode mode) {
         return mode == CommissionMode.ON_PURCHASE ? "On Purchase" : "On Close";
+    }
+
+    // Formats one user's summary row: username, balance, and a blocked marker when applicable — every field UserSummaryDto already carries.
+    private static String formatUserSummary(UserSummaryDto user) {
+        return user.username() + "  —  " + formatMoney(user.balance()) + (user.blocked() ? "  (BLOCKED)" : "");
+    }
+
+    // Formats one row of a user's events-participation list: event name, status, trading method.
+    private static String formatParticipation(UserEventParticipationDto participation) {
+        return participation.eventName() + "  —  " + participation.eventStatus() + "  —  " + participation.tradingMethod();
     }
 
     // Pins Locale.US so money/share values can't silently print a comma on a non-English-default JVM — same discipline ui.Main already applies.
