@@ -136,6 +136,10 @@ flowchart TD
   `IllegalTradeException`/`InvalidCommandStateException` for insufficient-funds/wrong-status
   failures rather than introducing new exception types for cases the existing ones already
   shape-match.
+  **openEvent implementation stage:** `openEvent`'s return type changed from `void` to
+  `EventStatusDto` — the skeleton-stage guess turns out unnecessary once actually
+  implementing it, since `EngineImpl` already has `toStatusDto()` to reuse (same accepted
+  pattern as `participateInEvent`'s third-parameter type fix). No other signature changed.
 
 ### `engine.impl` package
 
@@ -204,6 +208,20 @@ flowchart TD
   persist/restore `users`, via `StateFileManager.save(events, users, filePath)` and the new
   `LoadedState` return type — previously only `events` round-tripped at all; see
   `StateFileManager`'s entry below for the mechanics.
+  **openEvent implementation stage:** `openEvent(int, String)` is real now, following the
+  same `findEvent()`-then-validate shape every other mutating method uses: authorization
+  first (`!username.equals(event.getMarketMakerUsername())` → `UnauthorizedMarketMakerException`,
+  checked before status so an unauthorized caller never even learns the event's current
+  state), then status (`!= NOT_STARTED` → `IllegalTradeException` naming the actual status,
+  same wording pattern as `findActiveEvent()`'s own fix above), then affordability
+  (`LmsrMath.initialSubsidy(...)` against the MM's `User.getBalance()` — looked up via
+  `users.get(username)` with no defensive null-check, since an event's
+  `marketMakerUsername` is guaranteed by load-time cross-validation to name a real loaded
+  user; `IllegalTradeException` if unaffordable, **before any mutation happens**, so a
+  rejected open leaves the MM's balance and the event's account/status all untouched —
+  verified directly, not just assumed). On success: `marketMaker.debit(subsidy)`,
+  `event.getMarketMakerAccount().credit(subsidy)`, `event.open()`, return `toStatusDto(event)`
+  — same mapper every other method already shares, no new DTO needed.
 
 ### `engine.domain` package
 
@@ -316,6 +334,9 @@ the intentionally top-level, `ui`-facing packages.
   method, not a generic setter). Assigned exactly once, by
   `EventsFileLoader`'s new `GM-users`/`GM-market-maker` cross-referencing pass, immediately
   when a user's MM reference to this event is validated.
+  **openEvent implementation stage:** gained `open()`, mirroring `close()`'s exact pattern —
+  the only way status transitions `NOT_STARTED` → `ACTIVE`, called exclusively by
+  `EngineImpl.openEvent()` after authorization/status/affordability all pass.
 
 #### `User` (`engine/src/engine/domain/User.java`) — Ex2 Users-engine-logic stage, new
 - **What it is:** One registered user's account — a `name` and a `balance`, plus a derived
@@ -328,8 +349,12 @@ the intentionally top-level, `ui`-facing packages.
 - **What it connects to:** Built by `EventsFileLoader`'s new `GM-users` parsing pipeline
   (`extractUsers()`/`buildUser()`), one fresh instance per `GM-user` element, no reuse across
   loads (same lifecycle as `Event`). Held in `EngineImpl`'s new `Map<String, User> users`
-  field, keyed by name. No balance-mutating methods exist yet — nothing calls them until
-  `participateInEvent`/`openEvent` gain a `username` parameter, a later stage.
+  field, keyed by name.
+  **openEvent implementation stage:** gained its first balance-mutating method,
+  `debit(double)` — matching `MarketMakerAccount.debit()`'s exact naming/doc-comment style
+  (never clamped). Called by `EngineImpl.openEvent()` to move the LMSR subsidy out of the
+  MM's balance. No `credit()` yet — nothing calls it, same minimal-scope discipline this
+  class started with.
 
 ### `engine.domain.lmsr` package
 
@@ -351,6 +376,10 @@ the intentionally top-level, `ui`-facing packages.
   `engine/test/engine/domain/lmsr/LmsrMathTest.java`, run via the JUnit Platform Console
   Standalone jar in `lib/` (test-only dependency — never bundled into `engine.jar`). `test.bat`
   at the project root compiles and runs it.
+  **openEvent implementation stage:** gained a fourth method, `initialSubsidy(int
+  liquidityParameter)` — `C(0,0) = b · ln(2)`, moved (not duplicated) from a private helper
+  that used to live in `EventsFileLoader`. Needed in a second place now (`EngineImpl.openEvent`),
+  so it belongs in this shared math utility rather than being copy-pasted into both callers.
 
 ### `engine.impl.xml` package
 
@@ -407,6 +436,15 @@ the intentionally top-level, `ui`-facing packages.
     instead: `test_files/ex2-users-lmsr-only.xml` (LMSR-only, includes a user who is MM for
     multiple events at once) plus a set of small synthetic negative-case files exercised
     through a throwaway harness, one per validation rule.
+  - **openEvent implementation stage — correction to this entry's own "What it connects to"
+    bullet above:** `buildEvent()` no longer computes the initial LMSR subsidy or funds
+    `MarketMakerAccount` with it at load time — that was an Ex1 leftover from when events
+    started `ACTIVE` immediately with no separate "open" step. Every event's
+    `MarketMakerAccount` now starts at `0.0`; the subsidy only moves (from the MM's own
+    `User.balance`) when `EngineImpl.openEvent()` actually opens it. The subsidy formula
+    itself moved to `LmsrMath.initialSubsidy()` (see that class's entry above) since
+    `EngineImpl.openEvent` needed it too — no longer duplicated, and no longer computed here
+    at all.
 
 #### `LoadedFile` (`engine/src/engine/impl/xml/LoadedFile.java`) — Ex2 Users-engine-logic stage, new
 - **What it is:** `record LoadedFile(List<Event> events, List<User> users)` — the result of one
@@ -959,6 +997,14 @@ the intentionally top-level, `ui`-facing packages.
   non-exhaustive `EventStatus` branch anywhere in the codebase — every other usage (here and
   in `MainViewController.java`) is either an equality filter or plain `.toString()`, neither
   of which needed touching.
+
+  **openEvent implementation stage — accepted, confirmed-not-a-regression limitation:** with
+  events starting `NOT_STARTED` and this console UI having no `openEvent` command (opening an
+  event is an Ex2/Users/MM concept this frozen Ex1 reference was never extended to), Commands
+  4 (Participate) and 5 (Close) can now never reach any event — every event permanently
+  rejects them with `IllegalTradeException`'s "not currently active" message. Confirmed with
+  the user this is an accepted consequence of `ui.Main` being kept only as a working reference
+  until the JavaFX UI fully replaces it, not something to fix here.
 
 #### `GuessMarketApp` (`ui/src/ui/GuessMarketApp.java`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A `javafx.application.Application` subclass — the project's first JavaFX

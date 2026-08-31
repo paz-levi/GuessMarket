@@ -232,11 +232,32 @@ public class EngineImpl implements IEngine {
         return new UserDetailDto(user.getName(), user.getBalance(), user.isBlocked(), List.of());
     }
 
-    // Not yet implemented — Ex2 skeleton stage stub.
+    // Opens a NOT_STARTED event for trading: only its assigned MM may open it, and only if they can afford the LMSR subsidy.
     @Override
-    public void openEvent(int eventId, String username)
+    public EventStatusDto openEvent(int eventId, String username)
             throws EventNotFoundException, InvalidCommandStateException, UnauthorizedMarketMakerException, IllegalTradeException {
-        throw new UnsupportedOperationException("openEvent not yet implemented");
+        Event event = findEvent(eventId);
+        if (!username.equals(event.getMarketMakerUsername())) {
+            throw new UnauthorizedMarketMakerException("User \"" + username
+                    + "\" is not the market maker for event id " + eventId + ".");
+        }
+        if (event.getStatus() != EventStatus.NOT_STARTED) {
+            throw new IllegalTradeException("Event id " + eventId + " is not currently NOT_STARTED (status: "
+                    + event.getStatus() + ") and cannot be opened.");
+        }
+
+        // Guaranteed present: an event's marketMakerUsername can only ever be a name EventsFileLoader actually parsed as a GM-user.
+        User marketMaker = users.get(username);
+        double subsidy = LmsrMath.initialSubsidy(event.getLiquidityParameter());
+        if (marketMaker.getBalance() < subsidy) {
+            throw new IllegalTradeException("User \"" + username + "\" cannot afford to open event id " + eventId
+                    + ": subsidy " + subsidy + " exceeds balance " + marketMaker.getBalance() + ".");
+        }
+
+        marketMaker.debit(subsidy);
+        event.getMarketMakerAccount().credit(subsidy);
+        event.open();
+        return toStatusDto(event);
     }
 
     // Not yet implemented — Ex2 skeleton stage stub.

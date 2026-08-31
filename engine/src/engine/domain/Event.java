@@ -89,6 +89,11 @@ public final class Event implements Serializable {
         return winningOption;
     }
 
+    // Marks this event ACTIVE — the only way status transitions from NOT_STARTED. Called exclusively by EngineImpl.openEvent() after every check passes.
+    public void open() {
+        this.status = EventStatus.ACTIVE;
+    }
+
     // Marks this event CLOSED with the given winning option — the only way status ever changes after construction.
     public void close(EventOption winningOption) {
         this.status = EventStatus.CLOSED;

@@ -149,7 +149,8 @@ public final class EventsFileLoader {
                     + "Order Book events are not yet supported in this build.");
         }
         int liquidityParameter = parseIntContent(firstChildElementByTag(lmsrElement, TAG_B));
-        MarketMakerAccount marketMakerAccount = new MarketMakerAccount(computeInitialSubsidy(liquidityParameter));
+        // Starts at 0, not the subsidy: the subsidy only moves from the MM's own balance once EngineImpl.openEvent() actually opens this event.
+        MarketMakerAccount marketMakerAccount = new MarketMakerAccount(0.0);
 
         return new Event(id, name, description, optionOne, optionTwo, commissionRate, commissionMode,
                 liquidityParameter, marketMakerAccount, EventStatus.NOT_STARTED);
@@ -257,10 +258,5 @@ public final class EventsFileLoader {
     // Trims and parses an element's text content as an integer.
     private static int parseIntContent(Element element) {
         return Integer.parseInt(element.getTextContent().trim());
-    }
-
-    // Computes the LMSR initial subsidy C(0,0) = b * ln(2), the cost function's value before any shares are bought.
-    private static double computeInitialSubsidy(int liquidityParameter) {
-        return liquidityParameter * Math.log(2);
     }
 }

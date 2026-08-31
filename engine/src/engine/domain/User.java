@@ -27,4 +27,9 @@ public final class User implements Serializable {
     public boolean isBlocked() {
         return balance < 0;
     }
+
+    // Decreases the balance by amount. Never clamped: the balance can legitimately go negative.
+    public void debit(double amount) {
+        balance -= amount;
+    }
 }

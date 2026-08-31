@@ -59,7 +59,7 @@ public interface IEngine {
     UserDetailDto getUser(String username) throws InvalidCommandStateException, UserNotFoundException;
 
     // Opens an event for trading (paying its initial subsidy/stock from the MM's account); only the event's assigned MM may call this successfully.
-    void openEvent(int eventId, String username)
+    EventStatusDto openEvent(int eventId, String username)
             throws EventNotFoundException, InvalidCommandStateException, UnauthorizedMarketMakerException, IllegalTradeException;
 
     // Submits an order-book order (buy or sell) for one option of an event and returns the resulting order.

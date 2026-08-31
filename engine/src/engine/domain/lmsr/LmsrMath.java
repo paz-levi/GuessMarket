@@ -25,6 +25,11 @@ public final class LmsrMath {
         return costAfter - costBefore;
     }
 
+    // The LMSR initial subsidy C(0,0) = b * ln(2), the cost function's value before any shares are bought.
+    public static double initialSubsidy(int liquidityParameter) {
+        return liquidityParameter * Math.log(2);
+    }
+
     // Shared e^(q1/b) + e^(q2/b) term used by both cost() and price(), factored out so it's computed the same way in exactly one place.
     private static double sumOfExponentials(double sharesOptionOne, double sharesOptionTwo, double liquidityParameter) {
         return Math.exp(sharesOptionOne / liquidityParameter) + Math.exp(sharesOptionTwo / liquidityParameter);
