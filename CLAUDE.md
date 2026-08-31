@@ -95,7 +95,14 @@ same interface next.
 
 - **`engine` stays 100% passive.** Hard rule: **zero `javafx.*` imports anywhere in
   `engine`.** JavaFX `Property`/`Observable` binding happens only inside `ui`, wrapping DTOs
-  the engine already returns — see Section 8.
+  the engine already returns — see Section 8. **`Task` belongs to `ui`, not `engine`, for
+  the same reason — lecturer-confirmed, not just inferred:** a `Task` is inherently
+  "JavaFX-colored" (its `messageProperty`/`progressProperty`, the choice between updating
+  properties directly vs. `Platform.runLater`) and would tie `engine` to JavaFX for no real
+  benefit if it lived there instead — think of it as `ui` calling out to `engine` from a
+  background thread, not `engine` owning the threading concern itself. `engine` methods
+  stay ordinary synchronous calls; `ui` is the one that decides to run them off the JavaFX
+  Application Thread.
 - **`ui` becomes a JavaFX `Application`.** FXML + Controller vs. building scenes in code is
   not mandated by the spec — pick one and stay consistent.
 
@@ -252,10 +259,16 @@ Every non-trivial method gets one short plain-language comment line directly abo
 bar already applied throughout the existing code.
 
 ### Log — `PROGRESS_LOG.md`
-**After every commit, append one entry automatically, without being asked** — commit hash,
-date, 2-4 terse sentences on what changed, why, and which spec/CLAUDE.md rule it satisfies.
-Newest entry at the top. This is already an active habit in this repo — keep it going for Ex2,
-don't let it lapse just because the module under work changed.
+**After every commit, append one entry** — commit hash, date, 2-4 terse sentences on what
+changed, why, and which spec/CLAUDE.md rule it satisfies. Newest entry at the top. This is
+already an active habit in this repo — keep it going for Ex2.
+
+**Commits are always made manually, via the console — never run `git commit` yourself.**
+Prepare changes and stop once they're ready for review (per Section 6/current-stage
+instructions); the user commits by hand and then supplies the real commit hash in a
+follow-up message. Only add the `PROGRESS_LOG.md` entry once given that hash — never guess
+or invent one, and never add the entry proactively right after presenting a diff for review,
+since no commit has happened yet at that point.
 
 *(Note: an older draft of this file also referenced `MY_LEARNING_LOG.md` as a fourth,
 personal-reflection layer. It doesn't appear to exist as an actual committed file in this
