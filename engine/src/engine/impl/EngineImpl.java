@@ -22,10 +22,13 @@ import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
+import engine.domain.User;
 import engine.domain.lmsr.LmsrMath;
+import engine.impl.state.LoadedState;
 import engine.impl.state.StateFileManager;
 import engine.impl.trading.TradeExecutor;
 import engine.impl.xml.EventsFileLoader;
+import engine.impl.xml.LoadedFile;
 import exception.EventNotFoundException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
@@ -41,14 +44,19 @@ public class EngineImpl implements IEngine {
     private static final String NO_FILE_LOADED_MESSAGE = "No events file has been loaded yet.";
 
     private final Map<Integer, Event> events = new LinkedHashMap<>();
+    private final Map<String, User> users = new LinkedHashMap<>();
 
-    // Loads and validates the file fully before touching any live state, then atomically replaces it on success.
+    // Loads and validates the file fully before touching any live state, then atomically replaces it (both events and users) on success.
     @Override
     public void loadEventsFile(String filePath) throws XmlValidationException {
-        List<Event> loadedEvents = EventsFileLoader.load(filePath);
+        LoadedFile loaded = EventsFileLoader.load(filePath);
         events.clear();
-        for (Event event : loadedEvents) {
+        for (Event event : loaded.events()) {
             events.put(event.getId(), event);
+        }
+        users.clear();
+        for (User user : loaded.users()) {
+            users.put(user.getName(), user);
         }
     }
 
@@ -103,21 +111,23 @@ public class EngineImpl implements IEngine {
         return toStatusDto(event);
     }
 
-    // Serializes every currently loaded event (all trade history, account balances) to a save-state file.
+    // Serializes every currently loaded event and user (all trade history, account balances) to a save-state file.
     @Override
     public void saveState(String filePath) throws InvalidCommandStateException, StateFileException {
         if (events.isEmpty()) {
             throw new InvalidCommandStateException(NO_FILE_LOADED_MESSAGE);
         }
-        StateFileManager.save(events, filePath);
+        StateFileManager.save(events, users, filePath);
     }
 
-    // Deserializes a previously saved state file fully before touching any live state, then atomically replaces it on success.
+    // Deserializes a previously saved state file fully before touching any live state, then atomically replaces it (both events and users) on success.
     @Override
     public void loadState(String filePath) throws StateFileException {
-        Map<Integer, Event> loadedEvents = StateFileManager.load(filePath);
+        LoadedState loaded = StateFileManager.load(filePath);
         events.clear();
-        events.putAll(loadedEvents);
+        events.putAll(loaded.events());
+        users.clear();
+        users.putAll(loaded.users());
     }
 
     // Looks up an event by id; throws InvalidCommandStateException if no file has ever been loaded, else EventNotFoundException if the id is unknown.
@@ -136,7 +146,8 @@ public class EngineImpl implements IEngine {
     private Event findActiveEvent(int eventId) throws InvalidCommandStateException, EventNotFoundException, IllegalTradeException {
         Event event = findEvent(eventId);
         if (event.getStatus() != EventStatus.ACTIVE) {
-            throw new IllegalTradeException("Event id " + eventId + " is closed and no longer accepts trades.");
+            throw new IllegalTradeException("Event id " + eventId + " is not currently active (status: "
+                    + event.getStatus() + ") and does not accept trades.");
         }
         return event;
     }
@@ -186,16 +197,39 @@ public class EngineImpl implements IEngine {
                 trade.getCommissionPaid(), trade.getTotalPaid(), toStatusDto(event));
     }
 
-    // Not yet implemented — Ex2 skeleton stage stub.
+    // Returns a summary DTO for every currently loaded user.
     @Override
     public List<UserSummaryDto> listUsers() throws InvalidCommandStateException {
-        throw new UnsupportedOperationException("listUsers not yet implemented");
+        if (users.isEmpty()) {
+            throw new InvalidCommandStateException(NO_FILE_LOADED_MESSAGE);
+        }
+        return users.values().stream()
+                .map(EngineImpl::toUserSummaryDto)
+                .toList();
     }
 
-    // Not yet implemented — Ex2 skeleton stage stub.
+    // Maps a domain User to the DTO shape ui is allowed to see.
+    private static UserSummaryDto toUserSummaryDto(User user) {
+        return new UserSummaryDto(user.getName(), user.getBalance(), user.isBlocked());
+    }
+
+    // Returns the full detail view for one user, looked up by name.
     @Override
     public UserDetailDto getUser(String username) throws InvalidCommandStateException, UserNotFoundException {
-        throw new UnsupportedOperationException("getUser not yet implemented");
+        if (users.isEmpty()) {
+            throw new InvalidCommandStateException(NO_FILE_LOADED_MESSAGE);
+        }
+        User user = users.get(username);
+        if (user == null) {
+            throw new UserNotFoundException("No user named \"" + username + "\" is currently loaded.");
+        }
+        return toUserDetailDto(user);
+    }
+
+    // Builds the full "user detail" DTO from a domain User. activeParticipations is empty for now: there is no way to
+    // attribute a trade to a specific user yet, since participateInEvent still has no username parameter.
+    private static UserDetailDto toUserDetailDto(User user) {
+        return new UserDetailDto(user.getName(), user.getBalance(), user.isBlocked(), List.of());
     }
 
     // Not yet implemented — Ex2 skeleton stage stub.

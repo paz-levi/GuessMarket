@@ -318,9 +318,13 @@ public final class Main {
         return String.format(Locale.US, "%.2f", value);
     }
 
-    // Friendly display text for an event's lifecycle status.
+    // Friendly display text for an event's lifecycle status. Exhaustive switch, no default: a future added status fails to compile here instead of silently falling through.
     private static String formatStatus(EventStatus status) {
-        return status == EventStatus.ACTIVE ? "Active" : "Closed";
+        return switch (status) {
+            case NOT_STARTED -> "Not Started";
+            case ACTIVE -> "Active";
+            case CLOSED -> "Closed";
+        };
     }
 
     // Friendly display text for a commission-collection mode.

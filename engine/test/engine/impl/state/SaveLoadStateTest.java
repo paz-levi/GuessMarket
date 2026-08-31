@@ -23,6 +23,7 @@ import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
+import engine.domain.User;
 import exception.StateFileException;
 
 // Covers a full save/load round-trip (every field plus the winningOption/Trade.option aliasing) and the missing/corrupt-file
@@ -39,19 +40,21 @@ class SaveLoadStateTest {
     @Test
     void roundTripsEveryFieldAndPreservesObjectIdentity() {
         Map<Integer, Event> original = buildFixtureEvents();
+        Map<String, User> originalUsers = buildFixtureUsers();
         String path = tempDir.resolve("mystate").toString();
 
-        StateFileManager.save(original, path);
-        Map<Integer, Event> loaded = StateFileManager.load(path);
+        StateFileManager.save(original, originalUsers, path);
+        LoadedState loaded = StateFileManager.load(path);
+        Map<Integer, Event> loadedEvents = loaded.events();
 
-        assertEquals(original.keySet(), loaded.keySet());
+        assertEquals(original.keySet(), loadedEvents.keySet());
 
-        Event loadedActive = loaded.get(1);
+        Event loadedActive = loadedEvents.get(1);
         assertEventFieldsMatch(original.get(1), loadedActive);
         assertEquals(EventStatus.ACTIVE, loadedActive.getStatus());
         assertNull(loadedActive.getWinningOption());
 
-        Event loadedClosed = loaded.get(2);
+        Event loadedClosed = loadedEvents.get(2);
         assertEventFieldsMatch(original.get(2), loadedClosed);
         assertEquals(EventStatus.CLOSED, loadedClosed.getStatus());
         assertTrue(loadedClosed.getMarketMakerAccount().getBalance() < 0);
@@ -62,6 +65,13 @@ class SaveLoadStateTest {
         // Same for a Trade's option reference -- it must alias the event's own reconstructed EventOption, not an equal copy.
         assertSame(loadedActive.getOptionOne(), loadedActive.getTradeHistory().get(0).getOption());
         assertSame(loadedClosed.getOptionOne(), loadedClosed.getTradeHistory().get(0).getOption());
+
+        // Users must round-trip too, not just events.
+        Map<String, User> loadedUsers = loaded.users();
+        assertEquals(originalUsers.keySet(), loadedUsers.keySet());
+        assertEquals(originalUsers.get("Avrum").getBalance(), loadedUsers.get("Avrum").getBalance(), DELTA);
+        assertEquals(originalUsers.get("Tikva").getBalance(), loadedUsers.get("Tikva").getBalance(), DELTA);
+        assertTrue(loadedUsers.get("Tikva").isBlocked());
     }
 
     // Loading a path with no saved file at it must fail clearly, not crash.
@@ -110,6 +120,14 @@ class SaveLoadStateTest {
         assertEquals(expected.getCommissionPaid(), actual.getCommissionPaid(), DELTA);
         assertEquals(expected.getTotalPaid(), actual.getTotalPaid(), DELTA);
         assertEquals(expected.getTimestamp(), actual.getTimestamp());
+    }
+
+    // Builds a two-user fixture: one with a positive balance, one already blocked (negative balance) -- exercises isBlocked() round-tripping too.
+    private static Map<String, User> buildFixtureUsers() {
+        Map<String, User> users = new LinkedHashMap<>();
+        users.put("Avrum", new User("Avrum", 1000.0));
+        users.put("Tikva", new User("Tikva", -50.0));
+        return users;
     }
 
     // Builds a two-event fixture: one ACTIVE with a trade and a positive balance, one CLOSED with a trade and a negative (unclamped) balance.

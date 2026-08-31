@@ -4,7 +4,9 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import javax.xml.parsers.DocumentBuilder;
@@ -22,6 +24,7 @@ import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
+import engine.domain.User;
 import exception.XmlValidationException;
 
 // Loads, parses, and validates an events XML file into a list of fresh domain Events; never touches EngineImpl's live state itself.
@@ -42,8 +45,14 @@ public final class EventsFileLoader {
     private static final String TAG_GM_METHOD = "GM-method";
     private static final String TAG_GM_LMSR = "GM-LMSR";
     private static final String TAG_B = "b";
+    private static final String TAG_GM_USERS = "GM-users";
+    private static final String TAG_GM_USER = "GM-user";
+    private static final String TAG_INITIAL_CASH = "initial-cash";
+    private static final String TAG_GM_MARKET_MAKER = "GM-market-maker";
+    private static final String TAG_EVENT_REF = "event";
     private static final String ATTRIBUTE_NAME = "name";
     private static final String ATTRIBUTE_TYPE = "type";
+    private static final String ATTRIBUTE_ID = "id";
     private static final String COMMISSION_TYPE_ON_PURCHASE = "on-purchase";
 
     private static final int MIN_COMMISSION = 0;
@@ -53,11 +62,20 @@ public final class EventsFileLoader {
     private EventsFileLoader() {
     }
 
-    // Validates the path, parses the file, and builds a fully-validated list of domain Events; throws before any caller state is touched.
-    public static List<Event> load(String filePath) {
+    // Validates the path, parses the file, and builds a fully cross-referenced set of domain Events and Users; throws before any caller state is touched.
+    public static LoadedFile load(String filePath) {
         File file = validateFilePath(filePath);
         Document document = parseDocument(file);
-        return extractEvents(document);
+        List<Event> events = extractEvents(document);
+
+        Map<Integer, Event> eventsById = new LinkedHashMap<>();
+        for (Event event : events) {
+            eventsById.put(event.getId(), event);
+        }
+        List<User> users = extractUsers(document, eventsById);
+        requireEveryEventHasAMarketMaker(events);
+
+        return new LoadedFile(events, users);
     }
 
     // Checks the path ends in .xml (case-insensitive) and points at an existing file, per CLAUDE.md's minimum load validation.
@@ -134,7 +152,7 @@ public final class EventsFileLoader {
         MarketMakerAccount marketMakerAccount = new MarketMakerAccount(computeInitialSubsidy(liquidityParameter));
 
         return new Event(id, name, description, optionOne, optionTwo, commissionRate, commissionMode,
-                liquidityParameter, marketMakerAccount, EventStatus.ACTIVE);
+                liquidityParameter, marketMakerAccount, EventStatus.NOT_STARTED);
     }
 
     // Reads and validates an event's GM-option names, enforcing the exactly-two-options business rule.
@@ -156,6 +174,72 @@ public final class EventsFileLoader {
     private static Element findCommissionElement(Element eventElement) {
         Element element = firstChildElementByTag(eventElement, COMMISSION_TAG);
         return element != null ? element : firstChildElementByTag(eventElement, COMMISSION_TAG_LEGACY);
+    }
+
+    // Requires a GM-users element, validates and builds every GM-user, and assigns each one's market-maker event references along the way.
+    private static List<User> extractUsers(Document document, Map<Integer, Event> eventsById) {
+        NodeList usersWrapperNodes = document.getElementsByTagName(TAG_GM_USERS);
+        if (usersWrapperNodes.getLength() == 0) {
+            throw new XmlValidationException("The file does not contain a " + TAG_GM_USERS + " element.");
+        }
+        NodeList userNodes = document.getElementsByTagName(TAG_GM_USER);
+        List<User> users = new ArrayList<>();
+        Set<String> seenNames = new HashSet<>();
+        for (int i = 0; i < userNodes.getLength(); i++) {
+            Element userElement = (Element) userNodes.item(i);
+            users.add(buildUser(userElement, seenNames, eventsById));
+        }
+        return users;
+    }
+
+    // Validates one GM-user element's business rules, builds the corresponding domain User, and assigns any market-maker event references it declares.
+    private static User buildUser(Element userElement, Set<String> seenNames, Map<Integer, Event> eventsById) {
+        String name = userElement.getAttribute(ATTRIBUTE_NAME).trim();
+        if (!seenNames.add(name)) {
+            throw new XmlValidationException("User name \"" + name + "\" appears more than once in the file.");
+        }
+
+        int initialCash = parseIntContent(firstChildElementByTag(userElement, TAG_INITIAL_CASH));
+        if (initialCash <= 0) {
+            throw new XmlValidationException("User \"" + name + "\" has initial-cash " + initialCash
+                    + ", which must be greater than 0.");
+        }
+
+        Element marketMakerElement = firstChildElementByTag(userElement, TAG_GM_MARKET_MAKER);
+        if (marketMakerElement != null) {
+            assignMarketMakerEvents(name, marketMakerElement, eventsById);
+        }
+
+        return new User(name, initialCash);
+    }
+
+    // Assigns every event a GM-market-maker element references to the given user, validating each reference along the way.
+    private static void assignMarketMakerEvents(String username, Element marketMakerElement, Map<Integer, Event> eventsById) {
+        NodeList eventRefs = marketMakerElement.getElementsByTagName(TAG_EVENT_REF);
+        for (int i = 0; i < eventRefs.getLength(); i++) {
+            Element eventRef = (Element) eventRefs.item(i);
+            int eventId = Integer.parseInt(eventRef.getAttribute(ATTRIBUTE_ID).trim());
+            Event event = eventsById.get(eventId);
+            if (event == null) {
+                throw new XmlValidationException("User \"" + username + "\" is declared as market maker for event id "
+                        + eventId + ", which does not exist.");
+            }
+            if (event.getMarketMakerUsername() != null) {
+                throw new XmlValidationException("Event id " + eventId + " already has a market maker (\""
+                        + event.getMarketMakerUsername() + "\"); an event may have exactly one market maker.");
+            }
+            event.assignMarketMaker(username);
+        }
+    }
+
+    // Rejects any event nobody claimed as market maker — the "zero MM" half of the exactly-one-MM-per-event rule (the "more than one" half is caught eagerly in assignMarketMakerEvents).
+    private static void requireEveryEventHasAMarketMaker(List<Event> events) {
+        for (Event event : events) {
+            if (event.getMarketMakerUsername() == null) {
+                throw new XmlValidationException("Event id " + event.getId()
+                        + " has no market maker assigned; every event must have exactly one market maker.");
+            }
+        }
     }
 
     // Returns the first direct child element of the given name, or null if there isn't one.

@@ -26,6 +26,8 @@ public final class Event implements Serializable {
     private final List<Trade> tradeHistory;
     // The option declared as the winner when this event is closed; null while ACTIVE.
     private EventOption winningOption;
+    // The username of this event's assigned market maker; null until EventsFileLoader's GM-users pass assigns it.
+    private String marketMakerUsername;
 
     public Event(int id, String name, String description, EventOption optionOne, EventOption optionTwo,
                  int commissionRate, CommissionMode commissionMode, int liquidityParameter,
@@ -111,5 +113,14 @@ public final class Event implements Serializable {
     // The option NOT selected by optionNumber — the "other side" whose share count LMSR math needs but doesn't change.
     public EventOption getOtherOption(int optionNumber) {
         return optionNumber == 1 ? optionTwo : optionOne;
+    }
+
+    public String getMarketMakerUsername() {
+        return marketMakerUsername;
+    }
+
+    // Assigns this event's market maker; called exactly once by EventsFileLoader while cross-referencing GM-users.
+    public void assignMarketMaker(String username) {
+        this.marketMakerUsername = username;
     }
 }

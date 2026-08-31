@@ -184,6 +184,26 @@ flowchart TD
   builds is still LMSR-only. 5 new `@Override` stubs added (`listUsers()`, `getUser()`,
   `openEvent()`, `submitOrder()`, `listEvents(EventFilterDto)`), each throwing
   `UnsupportedOperationException` — no business logic yet.
+  **Ex2 Users-engine-logic stage:** `listUsers()`/`getUser(String)` are real now, following
+  the exact same shape as their event counterparts: a new `Map<String, User> users` field,
+  populated atomically alongside `events` inside `loadEventsFile()` (unpacking the new
+  `LoadedFile` from `EventsFileLoader.load()`); `listUsers()` guards on `users.isEmpty()` →
+  `InvalidCommandStateException`, `getUser()` additionally throws `UserNotFoundException` for
+  an unknown name; two new small mappers, `toUserSummaryDto(User)`/`toUserDetailDto(User)`
+  (distinct names from `toSummaryDto(Event)`/`toStatusDto(Event)`, avoiding an ambiguous
+  same-name overload). `UserDetailDto.activeParticipations` is `List.of()` for now — there is
+  no way yet to attribute a trade to a specific user, since `participateInEvent` still has no
+  `username` parameter; will populate once that parameter exists, a later stage.
+  `findActiveEvent()`'s rejection message was also corrected here: it was written
+  ("...is closed and no longer accepts trades.") assuming only two reachable non-ACTIVE
+  states existed pre-fix; now that events genuinely start `NOT_STARTED` (see `Event`'s entry
+  above), that wording is actively wrong for a freshly-loaded event — reworded to state the
+  event's actual status rather than assuming "closed." The underlying `!= ACTIVE` check itself
+  needed no change, exactly as anticipated when it was originally written.
+  **Save/Load-State bonus, same stage:** `saveState()`/`loadState()` now also
+  persist/restore `users`, via `StateFileManager.save(events, users, filePath)` and the new
+  `LoadedState` return type — previously only `events` round-tripped at all; see
+  `StateFileManager`'s entry below for the mechanics.
 
 ### `engine.domain` package
 
@@ -284,6 +304,32 @@ the intentionally top-level, `ui`-facing packages.
   the same instance as `optionOne` or `optionTwo` (set by `close()`), and this reference
   identity survives a save/load round-trip intact because
   `engine.impl.state.StateFileManager` writes an entire event graph in one `writeObject` call.
+  **Ex2 Users-engine-logic stage:** two changes. (1) `EventsFileLoader.buildEvent()` now
+  constructs every event as `NOT_STARTED` instead of `ACTIVE` — real lifecycle gating,
+  deferred since `dto.EventStatus.NOT_STARTED` was first added at the skeleton stage. No other
+  code needed to change: `EngineImpl.findActiveEvent()`'s existing `!= ACTIVE` check already
+  correctly rejects `NOT_STARTED` too (only its message needed a wording fix), and
+  `engine.impl.trading.TradeExecutor` has no status logic of its own at all — it only ever
+  runs against an event `findActiveEvent()` already vetted. (2) A new field,
+  `marketMakerUsername` (`null` until assigned), plus `getMarketMakerUsername()` and a named
+  mutator, `assignMarketMaker(String)` — mirrors `close()`'s pattern (one specific transition
+  method, not a generic setter). Assigned exactly once, by
+  `EventsFileLoader`'s new `GM-users`/`GM-market-maker` cross-referencing pass, immediately
+  when a user's MM reference to this event is validated.
+
+#### `User` (`engine/src/engine/domain/User.java`) — Ex2 Users-engine-logic stage, new
+- **What it is:** One registered user's account — a `name` and a `balance`, plus a derived
+  `isBlocked()` (`balance < 0`, computed, not a separately stored flag). Matches the existing
+  domain-class convention exactly: `implements Serializable`, `serialVersionUID`, fields set
+  once via the constructor.
+- **Why it exists:** The engine's real internal representation of a `GM-user`, kept out of
+  `dto` for the same reason `Event` is — `ui` must never see domain objects directly, only the
+  `UserSummaryDto`/`UserDetailDto` shapes `EngineImpl` maps them into.
+- **What it connects to:** Built by `EventsFileLoader`'s new `GM-users` parsing pipeline
+  (`extractUsers()`/`buildUser()`), one fresh instance per `GM-user` element, no reuse across
+  loads (same lifecycle as `Event`). Held in `EngineImpl`'s new `Map<String, User> users`
+  field, keyed by name. No balance-mutating methods exist yet — nothing calls them until
+  `participateInEvent`/`openEvent` gain a `username` parameter, a later stage.
 
 ### `engine.domain.lmsr` package
 
@@ -340,6 +386,36 @@ the intentionally top-level, `ui`-facing packages.
     loop. Covered by `test_files/error-7-no-events.xml` (well-formed `Guess-Market` root, empty
     `GM-events` wrapper) as the on-spec regression case, in addition to the schema file itself
     as the edge case that originally surfaced it.
+  - **Ex2 Users-engine-logic stage:** `load()`'s return type changed from `List<Event>` to a
+    new record, `LoadedFile(events, users)` (see below) — the loader now also parses and
+    cross-validates `GM-users`/`GM-market-maker`, per CLAUDE.md Section 2/4: unique user
+    name, `initial-cash > 0`, every MM event reference must exist, every event must have
+    exactly one MM. All fold into the existing `XmlValidationException` with a specific
+    message per case — no new exception types, matching the pattern already established by
+    the earlier Order Book NPE fix (`buildEvent()`'s `lmsrElement == null` guard, just above
+    this note in the source). MM event-refs are validated **eagerly, per-reference**, not
+    deferred to a final pass: an unknown id or an event already claimed by an earlier user
+    both throw immediately inside `assignMarketMakerEvents()`; only the "zero MM" case
+    (nobody ever claimed the event) needs the separate final pass,
+    `requireEveryEventHasAMarketMaker()`, run once after every user is processed. One
+    consequence worth recording since it contradicts an earlier assumption written into the
+    implementation plan: `test_files/ex2-error-3.xml` was expected to exercise this
+    eager-vs-final ordering (it has both a dangling MM reference *and* a resulting zero-MM
+    event), but it actually surfaces neither message — it also contains a `GM-order-book`
+    event, and `extractEvents()` (which walks all events before `extractUsers()` ever runs)
+    hits that pre-existing Order Book guard first. Verified with a purpose-built fixture
+    instead: `test_files/ex2-users-lmsr-only.xml` (LMSR-only, includes a user who is MM for
+    multiple events at once) plus a set of small synthetic negative-case files exercised
+    through a throwaway harness, one per validation rule.
+
+#### `LoadedFile` (`engine/src/engine/impl/xml/LoadedFile.java`) — Ex2 Users-engine-logic stage, new
+- **What it is:** `record LoadedFile(List<Event> events, List<User> users)` — the result of one
+  fully cross-referenced, fully validated file load.
+- **Why it exists:** `load()` needs to hand back two collections now instead of one, and this
+  package is purely `engine.impl.xml`-internal (never crosses the `IEngine` boundary), so a
+  small local record is simpler than reshaping `EngineImpl`'s own map types around it.
+- **What it connects to:** Returned by `EventsFileLoader.load()`; unpacked by
+  `EngineImpl.loadEventsFile()` into its `events`/`users` maps in one atomic replace.
 
 ### `engine.impl.trading` package
 
@@ -406,6 +482,13 @@ the intentionally top-level, `ui`-facing packages.
   unwrapped by `StateFileManager.load()`. Holds `List<engine.domain.Event>` directly (not
   DTOs) — safe here specifically because this class never crosses the `engine`→`ui` boundary,
   unlike every DTO in the `dto` package.
+  **Ex2 Users-engine-logic stage:** gained a second field, `List<engine.domain.User> users`
+  (same treatment as `events` — constructor-only, a new `getUsers()` alongside `getEvents()`).
+  Before this, the save/load-state bonus silently persisted only events; user data (balances,
+  blocked status) would have been lost across a save/load cycle. `serialVersionUID` stays
+  `1L` (an old `.gmstate` file saved before this change still deserializes fine — it just has
+  nothing in the stream for the new field, handled at the one read site in
+  `StateFileManager.load()`, see below).
 
 #### `StateFileManager` (`engine/src/engine/impl/state/StateFileManager.java`)
 - **What it is:** A class with no instances (only `static` methods) that saves the full engine
@@ -439,6 +522,24 @@ the intentionally top-level, `ui`-facing packages.
   (a JUnit `@TempDir` cleanup failure surfaced this during `test.bat`). Declaring both streams
   as separate resources guarantees the inner one still closes even when the outer constructor
   fails.
+  **Ex2 Users-engine-logic stage:** `save()` gains a `Map<String, User> users` parameter
+  alongside `events`, building the snapshot with both. `load()`'s return type changes from
+  `Map<Integer, Event>` to a new small record, `LoadedState(events, users)` — mirrors
+  `engine.impl.xml.LoadedFile`'s exact shape/purpose (a small internal carrier so this method
+  can hand back both collections without changing `EngineImpl`'s own map types). New private
+  `toUserMap(List<User>)` mirrors the existing `toEventMap(List<Event>)`. One defensive
+  addition beyond a pure mirror: `snapshot.getUsers()` can come back `null` when reading a
+  `.gmstate` file saved before this change (its stream simply has no `users` at all), guarded
+  with a `null`-to-`List.of()` fallback at the one call site rather than letting that surface
+  as a surprise NPE on an old save file.
+
+#### `LoadedState` (`engine/src/engine/impl/state/LoadedState.java`) — Ex2 Users-engine-logic stage, new
+- **What it is:** `record LoadedState(Map<Integer, Event> events, Map<String, User> users)` —
+  the result of reading back a full save-state file.
+- **Why it exists:** Same reasoning as `engine.impl.xml.LoadedFile`: `load()` needs to hand
+  back two collections now, and this stays purely `engine.impl.state`-internal.
+- **What it connects to:** Returned by `StateFileManager.load()`; unpacked by
+  `EngineImpl.loadState()` into its `events`/`users` maps in one atomic replace.
 
 ### `dto` package
 
@@ -846,6 +947,18 @@ the intentionally top-level, `ui`-facing packages.
   the specific exceptions those methods declare (`InvalidCommandStateException`/
   `StateFileException` for save, `StateFileException` alone for load), printing the message on
   failure or a fixed confirmation string on success — identical pattern to every other handler.
+
+  **Ex2 Users-engine-logic stage — one accepted exception to that stage's "no UI changes"
+  scope:** `formatStatus()` was `status == EventStatus.ACTIVE ? "Active" : "Closed"` — a
+  2-way ternary that silently mislabeled every `NOT_STARTED` event as "Closed" once
+  `EventsFileLoader` started constructing events as `NOT_STARTED` instead of `ACTIVE` (a
+  direct, unavoidable consequence of that stage's own engine change, not a new UI feature).
+  Replaced with an exhaustive `switch` expression over `EventStatus`, deliberately with no
+  `default` branch, so a future added status value fails to *compile* here instead of
+  silently falling through like this one did. Confirmed via `grep` this was the only
+  non-exhaustive `EventStatus` branch anywhere in the codebase — every other usage (here and
+  in `MainViewController.java`) is either an equality filter or plain `.toString()`, neither
+  of which needed touching.
 
 #### `GuessMarketApp` (`ui/src/ui/GuessMarketApp.java`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A `javafx.application.Application` subclass — the project's first JavaFX
