@@ -6,6 +6,62 @@ scannable in seconds.
 
 ---
 
+### `b1d3633` — 2026-08-31 — Wire Users tab per sketch: users list, balance badge, participation list, event details (read-only); align both tabs' SplitPane dividers to 0.48
+Users tab now matches the sketch layout precisely: a `SplitPane` (users list left, three
+stacked sections right — a top-right "Account Balance" badge via a right-aligned `HBox` +
+new `.balance-badge` CSS class, a full-width "Events Participation / Owner"
+`ListView<UserEventParticipationDto>`, and a full-width "Single event details and trade"
+read-only sub-panel driven by whichever participation gets selected). Selecting a user calls
+the existing `IEngine.getUser(String)`; all three sections rebuild from the resulting
+`UserDetailDto`. No trade/buy actions wired anywhere on this tab — correctly out of scope
+until `participateInEvent` gains a `username` parameter; `activeParticipations` is expected
+empty for the same reason. Reused, not duplicated: extracted the Events tab's existing
+`renderEventDetails`'s read-only display logic into a new shared
+`appendEventStatusDisplay(VBox, EventStatusDto)`, called by both the Events tab (still
+followed by the participate form) and the Users tab's event sub-panel (display only) — traced
+step-by-step against the pre-refactor version to confirm identical final content, not just
+asserted. Also aligned the Events tab's `SplitPane` divider from `0.35` to `0.48`, matching
+the Users tab and the newly-checked sketch reference (` docs-reference/ui-sketch-layout.md`,
+previous commit) — `0.35` was simply out of sync with the now-available source of truth, not
+a considered alternative. Build/tests clean; smoke-launch confirmed no runtime errors.
+
+### `6317dc9` — 2026-08-31 — docs: add UI sketch layout reference (precise shape positions from lecturer's pptx)
+New ` docs-reference/ui-sketch-layout.md` — a precise text distillation of the lecturer's
+`ex_2_scetch.pptx` (2 slides), added because the original binary file isn't in this repo and
+isn't reliably parseable without extra tooling. Documents the shared header/tab-bar chrome,
+Slide 1 (Events tab: filter line + event list left, order-book/LMSR details + participations
+right), and Slide 2 (Users tab: user table left, the three-section "Single User Details"
+right — balance badge, events-participation list, single-event details/trade) including the
+explicit note that both slides' panels are roughly equal width (~48%/52%), the source for
+this stage's `SplitPane` divider decisions. Becomes the checked reference for screen layout
+going forward, the same role `exercise2-requirements.md` already plays for functional
+requirements.
+
+### `9965c3a` — 2026-08-31 — Implement openEvent: LMSR subsidy moves MM balance to event account on open, not load
+`IEngine.openEvent(int, String)` is real now (return type changed `void` → `EventStatusDto`,
+reusing the existing `toStatusDto()` mapper — no new DTO). `EngineImpl.openEvent()` checks, in
+order: authorization (`event.getMarketMakerUsername()` must equal the caller →
+`UnauthorizedMarketMakerException`, checked before status so an unauthorized caller never
+learns the event's state), status (`NOT_STARTED` only → `IllegalTradeException` naming the
+actual status), then affordability (`LmsrMath.initialSubsidy(b)` against the MM's own
+`User.balance` → `IllegalTradeException`, with zero mutation before this point). On success:
+debits the MM, credits the event's `MarketMakerAccount`, opens the event
+(`Event.open()`, mirroring `close()`'s pattern), returns the fresh status. Found and fixed a
+real design conflict during planning, not glossed over: `EventsFileLoader` was still pre-funding
+every event's `MarketMakerAccount` with the subsidy at *load* time — an Ex1 leftover from
+before `openEvent` existed — which would have double-funded every opened event. Moved subsidy
+funding to open-time entirely: `MarketMakerAccount` now starts at `0.0`, and the subsidy
+formula itself moved from a private `EventsFileLoader` helper to a new shared
+`LmsrMath.initialSubsidy()` (needed in two places now, so no longer duplicated). Confirmed no
+test relied on the old load-time funding before making the change. Also confirmed, not fixed:
+`ui.Main`'s Participate/Close commands can now never reach any event (no `openEvent` in the
+frozen Ex1 console UI) — an accepted consequence of its reference-only status, documented in
+`ARCHITECTURE.md`, not a regression to patch. Verified via a throwaway harness: happy path
+(exact subsidy debited/credited), unauthorized open, re-opening an already-`ACTIVE` or
+`CLOSED` event, and a new fixture (`test_files/ex2-users-insufficient-subsidy.xml`) confirming
+a rejected open leaves the MM's balance, the event's account, and its status all untouched.
+All 17 Ex1 tests still pass.
+
 ### `9083de7` — 2026-08-31 — docs: sync CLAUDE.md Task/ui architecture note
 Two additions to `CLAUDE.md`. Section 2 (Architecture & Module Separation): a new,
 lecturer-confirmed architecture note that `javafx.concurrent.Task` belongs to `ui`, not
