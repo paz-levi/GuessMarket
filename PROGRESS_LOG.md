@@ -6,6 +6,80 @@ scannable in seconds.
 
 ---
 
+### `9083de7` — 2026-08-31 — docs: sync CLAUDE.md Task/ui architecture note
+Two additions to `CLAUDE.md`. Section 2 (Architecture & Module Separation): a new,
+lecturer-confirmed architecture note that `javafx.concurrent.Task` belongs to `ui`, not
+`engine` — a `Task` is inherently JavaFX-colored (`messageProperty`/`progressProperty`,
+`Platform.runLater`) and would tie `engine` to JavaFX for no benefit if it lived there
+instead; `engine` methods stay ordinary synchronous calls, `ui` is the one that decides to
+run them off the JavaFX Application Thread. Section 7 ("Log — PROGRESS_LOG.md"): reworded the
+standing logging rule and made the manual-commit workflow explicit — commits are always made
+by hand via the console, never by Claude directly; changes are prepared and left for review,
+and a `PROGRESS_LOG.md` entry is only added once given the real commit hash, never invented
+or added proactively before a commit exists. (Note: Section 6's "Step 1 — Ex2 Skeleton Only"
+text is still stale relative to the stages actually built since — flagged separately in the
+Users-engine-logic stage's plan as worth doing, not blocking. This commit does not touch it.)
+
+### `0b9a67d` — 2026-08-31 — Add Users engine logic: GM-users parsing, listUsers/getUser, NOT_STARTED on load; extend Save/Load-State bonus to persist users
+Real engine logic for multi-user accounts, LMSR-only. `EventsFileLoader` now parses
+`GM-users`/`GM-market-maker`: unique user name, `initial-cash > 0`, every MM event reference
+must exist, every event must have exactly one MM — all folded into the existing
+`XmlValidationException` with a specific message per case, no new exception types. Validation
+order is a deliberate design choice, not incidental: each MM event-reference is checked
+*eagerly, per-reference* (unknown id, or an event already claimed by an earlier user, both
+throw immediately), with a separate final pass only for the "zero MM" case — an event nobody
+ever claimed. Events also now genuinely start `NOT_STARTED` on load instead of `ACTIVE`
+(deferred since the enum value was first added at the skeleton stage) — `EngineImpl`'s
+existing `findActiveEvent()` `!= ACTIVE` check already rejected this correctly, so only its
+error message needed a wording fix, not new logic. `listUsers()`/`getUser(String)` are real
+now (`UserSummaryDto`/`UserDetailDto`, built from a new `Map<String, User> users` field
+populated atomically alongside events); `activeParticipations` stays empty for now since
+`participateInEvent` still has no `username` parameter to attribute trades by. Also extended
+the Save/Load-State bonus (previously events-only) to persist users too —
+`EngineStateSnapshot`/`StateFileManager` gained a mirrored `users` field/parameter, with a
+`null`-to-`List.of()` fallback so a `.gmstate` file saved before this change still loads
+cleanly instead of NPEing. One accepted exception to this stage's "no UI changes" scope:
+`ui.Main.formatStatus()` was a 2-way ternary that would have silently mislabeled every
+`NOT_STARTED` event as "Closed" — replaced with an exhaustive `switch` (no `default`), so a
+future added status fails to *compile* here instead of silently mislabeling. Verified against
+a new LMSR-only fixture (`test_files/ex2-users-lmsr-only.xml`) plus synthetic negative cases
+for every new validation rule, and a full save/load round-trip of user data — all via a
+throwaway harness. One correction found during that verification, not assumed away: the real
+lecturer file `ex2-error-3.xml` does NOT exercise the eager-vs-final validation-order design
+as originally predicted — it also contains a `GM-order-book` event, and event extraction
+(which hits the pre-existing Order Book guard) runs entirely before user extraction ever
+starts, so it reports that rejection instead. All 17 Ex1 tests still pass, extended to also
+assert user round-tripping.
+
+### `a737d63` — 2026-08-31 — Add event details + participate flow (LMSR); replace quantity Spinner with TextField to stop silent value substitution
+Events tab is now a `SplitPane`: the existing list on the left, a details/participate panel on
+the right. Selecting a row calls the existing `IEngine.getEventStatus(int)` and renders both
+option prices/shares, MM balance, total commission, and trade history (already newest-first,
+DTO shapes reused as-is). Below that, an LMSR participate form (option `ComboBox` by name, a
+quantity input, a Buy button) calls the existing, untouched `IEngine.participateInEvent`; on
+success the `TradeConfirmationDto` breakdown shows via a confirmation `Alert`, then both panels
+refresh — the details panel reuses `confirmation.eventStatus()` directly rather than a second
+`getEventStatus` call. All failures reuse the one `showErrorAlert` helper. Order Book events
+still untouched/unreachable, as before.
+
+Found and fixed a real input-handling bug during manual testing, not just the feature itself:
+the quantity field was originally a `Spinner<Integer>`, which silently substituted `1` for any
+invalid typed value (negative, zero, non-numeric) instead of surfacing an error — the actual
+typed input never reached the engine at all. Root cause, confirmed by the user: this isn't a
+missing-validation bug, it's `Spinner`'s *designed* behavior — its editor reverts to the last
+valid committed value on focus-lost, which fires before the Buy button's click handler ever
+runs, so no amount of reading the editor's "raw" text differently could work around it (a first
+attempt at exactly that, reading `getEditor().getText()` instead of `.getValue()`, still didn't
+fully fix it for this reason). `Spinner` is fundamentally the wrong widget for this form.
+Replaced it with a plain `TextField` — no `StringConverter`, no value factory, no
+auto-correction — so nothing reverts what the user typed. Design decision now made explicit:
+an invalid quantity must always surface the engine's own `IllegalTradeException` rejection
+message, never get silently replaced with a "safe" value, since this app handles money — `ui`
+only rejects genuinely non-numeric text (a `NumberFormatException`, the same category as Ex1's
+`readInt` guarding console input); negative/zero/oversized values are deliberately left for
+the engine to reject, per the existing Ex1 principle that business-rule validation lives in
+`engine`, not `ui`. All 17 Ex1 tests unaffected throughout.
+
 ### `3123dc5` — 2026-08-30 — Wire real file loading: FileChooser + Task + IEngine.loadEventsFile, progress/error UI
 `MainViewController` now owns the Load File flow: `loadFileButton` opens a `FileChooser`
 (no default/typed directory, `*.xml` extension filter — the only way a path is ever obtained,
