@@ -16,6 +16,7 @@ import exception.GuessMarketException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
 import exception.StateFileException;
+import exception.UnauthorizedMarketMakerException;
 import exception.XmlValidationException;
 
 // Entry point and the entire console UI: the main menu loop, every Scanner read, every System.out.println.
@@ -26,7 +27,9 @@ public final class Main {
     private static final String EVENT_SEPARATOR = "-".repeat(40);
     private static final String INDENT = "    ";
     // This console has no user concept, and any event it can load is permanently NOT_STARTED (no openEvent command
-    // exists here) -- findActiveEvent's status check always throws before this placeholder is ever actually used.
+    // exists here) -- both participateInEvent's active-status check and closeEvent's own status check always throw
+    // before this placeholder's value is ever actually meaningful (closeEvent now checks MM identity first, so in
+    // practice it fails as an unrecognized market maker rather than reaching the status check at all).
     private static final String CONSOLE_PLACEHOLDER_USERNAME = "console";
 
     private Main() {
@@ -185,8 +188,9 @@ public final class Main {
                 statusBeforeClose.optionTwoName(), scanner, "Select the winning option by number: ");
 
         try {
-            printEventStatus(engine.closeEvent(eventId, winningOptionNumber));
-        } catch (InvalidCommandStateException | EventNotFoundException | IllegalTradeException e) {
+            printEventStatus(engine.closeEvent(eventId, CONSOLE_PLACEHOLDER_USERNAME, winningOptionNumber));
+        } catch (InvalidCommandStateException | EventNotFoundException | IllegalTradeException
+                | UnauthorizedMarketMakerException e) {
             System.out.println(e.getMessage());
         }
     }

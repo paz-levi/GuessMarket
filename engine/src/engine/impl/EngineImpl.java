@@ -130,10 +130,21 @@ public class EngineImpl implements IEngine {
     }
 
     // Declares the winning option, settles payouts and commission, marks the event CLOSED, and returns its final status.
+    // Only the event's assigned MM may call this successfully -- mirrors openEvent's exact authorization shape and
+    // ordering: identity is checked before status, before anything else that could mutate state.
     @Override
-    public EventStatusDto closeEvent(int eventId, int winningOptionNumber)
-            throws EventNotFoundException, IllegalTradeException, InvalidCommandStateException {
-        Event event = findActiveEvent(eventId);
+    public EventStatusDto closeEvent(int eventId, String username, int winningOptionNumber)
+            throws EventNotFoundException, IllegalTradeException, InvalidCommandStateException,
+            UnauthorizedMarketMakerException {
+        Event event = findEvent(eventId);
+        if (!username.equals(event.getMarketMakerUsername())) {
+            throw new UnauthorizedMarketMakerException("User \"" + username
+                    + "\" is not the market maker for event id " + eventId + ".");
+        }
+        if (event.getStatus() != EventStatus.ACTIVE) {
+            throw new IllegalTradeException("Event id " + eventId + " is not currently ACTIVE (status: "
+                    + event.getStatus() + ") and cannot be closed.");
+        }
         // TradeExecutor.close() is pure LMSR settlement math (it pays the winning option's outstanding shares out of
         // the MM account). Running it on an Order Book event would silently produce nonsense, so it is refused until
         // Order Book settlement is actually implemented.
@@ -215,7 +226,7 @@ public class EngineImpl implements IEngine {
         EventOption winningOption = event.getWinningOption();
 
         return new EventStatusDto(
-                event.getId(), event.getName(), event.getStatus(),
+                event.getId(), event.getName(), event.getMarketMakerUsername(), event.getStatus(),
                 optionOne.getName(), optionTwo.getName(),
                 priceOne, priceTwo,
                 optionOne.getSharesOutstanding(), optionTwo.getSharesOutstanding(),

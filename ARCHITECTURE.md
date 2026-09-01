@@ -159,6 +159,15 @@ flowchart TD
   fully-filled order doesn't have), and it gained `UserNotFoundException` alongside its existing
   `UserBlockedException`. Its `SubmitOrderRequestDto` parameter is unchanged. No other method's
   signature moved.
+  **closeEvent-authorization follow-up:** `closeEvent` gains a `username` parameter and
+  `UnauthorizedMarketMakerException` on its throws clause — the last of the four Ex2-era
+  trading methods to gain caller identity (`openEvent`, `participateInEvent`, `submitOrder`
+  already had it). **Confirmed by manual testing to have been a real, exploitable authorization
+  gap, not a theoretical one:** the old `closeEvent(int, int)` had no MM check at all, so
+  *any* loaded user could close *any* event — directly contradicting
+  `exercise2-requirements.md`'s "only the assigned MM can open or close it." Both `ui.Main`'s
+  only call site and `gui`'s new Close control (below) go through the authorized version;
+  nothing bypasses it.
 
 ### `engine.impl` package
 
@@ -861,11 +870,16 @@ prices from whatever counterparties are actually resting. All three classes are 
   shape didn't fully cover; `winningOptionName` is `null` until `closeEvent()` actually closes
   something.
 - **What it connects to:** Returned by `IEngine.getEventStatus(int)`, embedded in
-  `TradeConfirmationDto.eventStatus`, and by `IEngine.closeEvent(int, int)`. Built exclusively
-  by `EngineImpl.toStatusDto()` — the one place this shape gets assembled, reused rather than
-  re-derived at each call site. Its `tradeHistory` field is a `List<TradeRecordDto>`. Printed in
-  full by `ui.Main.printEventStatus()` — Command 3's display, first wired this stage, reused
-  as-is once Participate/Close hand it the same shape.
+  `TradeConfirmationDto.eventStatus`, and by `IEngine.closeEvent(int, String, int)`. Built
+  exclusively by `EngineImpl.toStatusDto()` — the one place this shape gets assembled, reused
+  rather than re-derived at each call site. Its `tradeHistory` field is a `List<TradeRecordDto>`.
+  Printed in full by `ui.Main.printEventStatus()` — Command 3's display, first wired this stage,
+  reused as-is once Participate/Close hand it the same shape.
+  **closeEvent-authorization follow-up:** gained `marketMakerUsername: String`, sourced from
+  `Event.getMarketMakerUsername()` (guaranteed non-null once `EventsFileLoader` finishes
+  loading — `requireEveryEventHasAMarketMaker` refuses any file where an event lacks one), so
+  the detail panel can show who is actually authorized before a user guesses from the
+  Open/Close username dropdown.
   **Ex2 skeleton stage:** gained 3 trailing fields — `tradingMethod: TradingMethod`,
   `orderBooks: List<OrderBookSnapshotDto>` (one per option), and
   `participants: List<ParticipantDto>` — so the Events screen's unified "event detail view"
@@ -1099,9 +1113,10 @@ prices from whatever counterparties are actually resting. All three classes are 
   action in the system.
 - **Why it exists:** exercise2-requirements.md's negative-balance rule requires a distinct,
   catchable "you're blocked" outcome, separate from any specific trade/order being invalid.
-- **What it connects to:** Declared on `IEngine.submitOrder` (currently a stub); will need
-  adding to `participateInEvent`/`closeEvent` too once those gain a `username` parameter
-  (deferred — see `IEngine`'s Ex2 note above).
+- **What it connects to:** Declared on `IEngine.submitOrder` and `participateInEvent` (both
+  real as of their respective stages). `closeEvent` has no `UserBlockedException` of its own —
+  closing is the MM's own action against the event account, not a user's balance-checked
+  trade, so there is no user balance to gate it on.
 
 #### `UnauthorizedMarketMakerException` (`engine/src/exception/UnauthorizedMarketMakerException.java`) — Ex2 skeleton stage, new
 - **What it is:** Thrown when a user who is not an event's assigned market maker tries to
@@ -1109,8 +1124,14 @@ prices from whatever counterparties are actually resting. All three classes are 
 - **Why it exists:** The engine, not just `ui`, must enforce MM-only actions (same
   can't-be-trusted-alone principle as every other server-side check) — this is the dedicated
   category for that specific authorization failure.
-- **What it connects to:** Declared on `IEngine.openEvent` (currently a stub); will need
-  adding to `closeEvent` too once it gains a `username` parameter (same deferred gap as above).
+- **What it connects to:** Declared on `IEngine.openEvent`. **closeEvent-authorization
+  follow-up:** now also declared on `IEngine.closeEvent`, closing the gap flagged above —
+  `EngineImpl.closeEvent(eventId, username, winningOptionNumber)` checks
+  `username.equals(event.getMarketMakerUsername())` **before** its status check, mirroring
+  `openEvent`'s exact shape and ordering. Confirmed by a throwaway harness: a non-MM's close
+  attempt against a `NOT_STARTED` event fails as `UnauthorizedMarketMakerException`, not the
+  status-based `IllegalTradeException` — proving identity really is checked first, not just
+  documented as such.
 
 #### `UserNotFoundException` (`engine/src/exception/UserNotFoundException.java`) — Ex2 skeleton stage, new
 - **What it is:** Thrown when a caller references a username that doesn't exist in the
@@ -1338,6 +1359,19 @@ decided explicitly at submission time rather than folded silently into a refacto
   the Users tab's per-event sub-panel gets the same gating but **no** Open button — opening
   was scoped to the Events tab, and an MM opening their event from their own area is a
   one-line addition if wanted later.
+  **closeEvent-authorization follow-up:** `appendEventStatusDisplay` now shows a
+  "Market Maker: <name>" line (from `EventStatusDto.marketMakerUsername`) so a user picking
+  from the Open/Close username dropdown knows who is actually authorized instead of guessing.
+  The `ACTIVE` case of `buildActionControl` routes to a new `buildActiveControls`, which shows
+  the Buy form **and**, for LMSR events only, a Close form alongside it (both visible together
+  — not exclusive) via the new `buildCloseEventForm`/`handleCloseEventClick`, mirroring
+  `buildOpenEventForm`/`handleOpenEventClick`'s shape: a market-maker `ComboBox` (not
+  pre-filtered — the engine is the source of truth on who's authorized) plus a winning-option
+  `ComboBox`, calling `IEngine.closeEvent(eventId, username, winningOptionNumber)`. **The Close
+  form is hidden entirely for `tradingMethod == ORDER_BOOK`**, per the same "never show a
+  control that can only fail" principle already applied to Open/Buy — the engine already
+  refuses to close an Order Book event outright (Order Book settlement isn't implemented yet),
+  so showing the form would only ever produce a guaranteed rejection.
 
 #### `MainView.fxml` (`ui/resources/ui/MainView.fxml` → now `gui/resources/gui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +

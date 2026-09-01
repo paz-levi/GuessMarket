@@ -43,9 +43,11 @@ public interface IEngine {
             throws InvalidCommandStateException, EventNotFoundException, IllegalTradeException,
             UserNotFoundException, UserBlockedException;
 
-    // Declares the winning option, settles payouts, and returns the event's final settled state.
-    EventStatusDto closeEvent(int eventId, int winningOptionNumber)
-            throws EventNotFoundException, IllegalTradeException, InvalidCommandStateException;
+    // Declares the winning option, settles payouts, and returns the event's final settled state; only the event's
+    // assigned MM may call this successfully.
+    EventStatusDto closeEvent(int eventId, String username, int winningOptionNumber)
+            throws EventNotFoundException, IllegalTradeException, InvalidCommandStateException,
+            UnauthorizedMarketMakerException;
 
     // Serializes the full current state (every event, all trade history, account balances) to a save-state file.
     void saveState(String filePath) throws InvalidCommandStateException, StateFileException;

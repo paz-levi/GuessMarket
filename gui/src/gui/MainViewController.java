@@ -29,6 +29,7 @@ import dto.EventStatusDto;
 import dto.EventSummaryDto;
 import dto.TradeConfirmationDto;
 import dto.TradeRecordDto;
+import dto.TradingMethod;
 import dto.UserDetailDto;
 import dto.UserEventParticipationDto;
 import dto.UserSummaryDto;
@@ -276,10 +277,60 @@ public class MainViewController {
                     ? buildOpenEventForm(status.eventId(), onSuccess)
                     // The Users tab deliberately has no Open control (scoped to the Events tab), so it just explains why.
                     : new VBox(new Label("This event has not been opened yet — its market maker can open it from the Events tab."));
-            case ACTIVE -> buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
-                    fixedUsername, onSuccess);
+            case ACTIVE -> buildActiveControls(status, fixedUsername, onSuccess);
             case CLOSED -> new VBox(new Label("This event is closed and no longer accepts trades."));
         };
+    }
+
+    // An ACTIVE event always shows the Buy form. It additionally shows a Close form, but only for LMSR events --
+    // the engine refuses to close an Order Book event outright (settlement for that method isn't implemented yet),
+    // so per the same "never show a control that can only fail" principle already applied above, the Close form is
+    // hidden entirely for tradingMethod == ORDER_BOOK rather than left for the user to hit a guaranteed rejection.
+    private VBox buildActiveControls(EventStatusDto status, String fixedUsername, Consumer<EventStatusDto> onSuccess) {
+        VBox participateForm = buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
+                fixedUsername, onSuccess);
+        if (status.tradingMethod() != TradingMethod.LMSR) {
+            return participateForm;
+        }
+        return new VBox(10, participateForm, new Separator(),
+                buildCloseEventForm(status.eventId(), status.optionOneName(), status.optionTwoName(), onSuccess));
+    }
+
+    // Builds the "close this event" control: a user picker (market maker only, but let the engine reject a wrong
+    // choice rather than pre-filtering the list -- same approach as buildOpenEventForm) plus a winning-option
+    // selector and the button.
+    private VBox buildCloseEventForm(int eventId, String optionOneName, String optionTwoName, Consumer<EventStatusDto> onSuccess) {
+        ComboBox<String> usernameComboBox = buildUsernameComboBox();
+        ComboBox<String> winningOptionComboBox = new ComboBox<>();
+        winningOptionComboBox.getItems().addAll(optionOneName, optionTwoName);
+        winningOptionComboBox.getSelectionModel().selectFirst();
+        Button closeButton = new Button("Close Event");
+        closeButton.setOnAction(event -> handleCloseEventClick(eventId, usernameComboBox, winningOptionComboBox,
+                optionOneName, onSuccess));
+
+        return new VBox(6, new Label("Close this event (market maker only):"),
+                new HBox(8, usernameComboBox, winningOptionComboBox, closeButton));
+    }
+
+    // Closes the event via the existing IEngine.closeEvent, then redraws through the caller's own callback and
+    // refreshes both lists -- closing pays winners and (if on-close) collects commission, so balances change.
+    private void handleCloseEventClick(int eventId, ComboBox<String> usernameComboBox, ComboBox<String> winningOptionComboBox,
+                                        String optionOneName, Consumer<EventStatusDto> onSuccess) {
+        String username = usernameComboBox.getSelectionModel().getSelectedItem();
+        String winningOptionName = winningOptionComboBox.getSelectionModel().getSelectedItem();
+        if (username == null || username.isBlank() || winningOptionName == null) {
+            showErrorAlert("Invalid input", "Select both the market maker and the winning option.");
+            return;
+        }
+        int winningOptionNumber = winningOptionName.equals(optionOneName) ? 1 : 2;
+        try {
+            EventStatusDto closed = engine.closeEvent(eventId, username, winningOptionNumber);
+            onSuccess.accept(closed);
+            refreshEventsList();
+            refreshUsersList();
+        } catch (GuessMarketException e) {
+            showErrorAlert("Could not close the event", e);
+        }
     }
 
     // Builds the "open this event" control: a user picker plus the button. Only the event's assigned market maker can
@@ -317,6 +368,7 @@ public class MainViewController {
     private static void appendEventStatusDisplay(VBox container, EventStatusDto status) {
         container.getChildren().addAll(
                 new Label(status.eventName() + "  (id " + status.eventId() + ")  —  " + status.status()),
+                new Label("Market Maker: " + status.marketMakerUsername()),
                 new Label(status.optionOneName() + ": price " + formatMoney(status.optionOnePrice())
                         + ", shares " + formatMoney(status.optionOneShares())),
                 new Label(status.optionTwoName() + ": price " + formatMoney(status.optionTwoPrice())

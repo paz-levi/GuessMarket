@@ -6,6 +6,7 @@ import java.util.List;
 public record EventStatusDto(
         int eventId,
         String eventName,
+        String marketMakerUsername,
         EventStatus status,
         String optionOneName,
         String optionTwoName,
