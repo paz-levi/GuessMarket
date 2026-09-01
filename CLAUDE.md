@@ -123,6 +123,20 @@ same interface next.
 - **`gui` is the JavaFX `Application`** (module split from `ui` — see Section 0). FXML +
   Controller vs. building scenes in code is not mandated by the spec — pick one and stay
   consistent.
+- **`MainViewController` decomposition — deliberately deferred, not overlooked.** The
+  lecturer's JavaFX materials teach splitting complex screens into `<fx:include>`
+  sub-components (with a specific `fx:id`→`XxxController` field-naming convention). This
+  controller is growing into a god-class (file load, both tabs' lists/details/forms) and
+  will grow more once Order Book UI is added. Considered and explicitly **not** done now:
+  a real `<fx:include>` split needs a real inter-controller communication design (opening an
+  event from the Events tab must also refresh the Users tab, and vice versa) — that design
+  question doesn't get any cheaper by waiting, so there's no rush cost to deferring it, only
+  the cost of code volume. **Compromise, active now:** new large UI blocks (starting with
+  Order Book's book display / order-submission UI) go into plain static-method Java helper
+  classes (e.g. `OrderBookPanelBuilder`, not FXML, not a separate `Controller`) that
+  `MainViewController` calls — this keeps the controller from growing further without
+  committing to the harder inter-controller design before the full picture (incl. Order
+  Book UI) is known. Revisit a real `<fx:include>` split in the polish stage if time allows.
 
 ### Existing structure — confirmed from `ARCHITECTURE.md`, read it before adding anything
 
