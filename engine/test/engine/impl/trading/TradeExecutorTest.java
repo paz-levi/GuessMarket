@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import dto.EventStatus;
+import dto.TradingMethod;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
@@ -173,7 +174,7 @@ class TradeExecutorTest {
     private static Event newEvent(int commissionRate, CommissionMode commissionMode) {
         return new Event(1, "Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
                 commissionRate, commissionMode, (int) LIQUIDITY_PARAMETER,
-                new MarketMakerAccount(0.0), EventStatus.ACTIVE);
+                new MarketMakerAccount(0.0), EventStatus.ACTIVE, TradingMethod.LMSR, null);
     }
 
     // A fresh buyer with a comfortably large balance, so none of these tests accidentally trip UserBlockedException territory.

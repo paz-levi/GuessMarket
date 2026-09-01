@@ -6,6 +6,8 @@ import java.util.Collections;
 import java.util.List;
 
 import dto.EventStatus;
+import dto.TradingMethod;
+import engine.domain.orderbook.OrderBookMarket;
 
 // A single Guess Market event: its two options, commission rules, MM account, status, and trade history.
 public final class Event implements Serializable {
@@ -28,10 +30,16 @@ public final class Event implements Serializable {
     private EventOption winningOption;
     // The username of this event's assigned market maker; null until EventsFileLoader's GM-users pass assigns it.
     private String marketMakerUsername;
+    // Which trading mechanism this event uses. Never null.
+    private final TradingMethod tradingMethod;
+    // All Order Book state, composed rather than inherited; null for an LMSR event (and on .gmstate files saved
+    // before Order Book existed). liquidityParameter is the mirror-image field: meaningful only for LMSR.
+    private final OrderBookMarket orderBook;
 
     public Event(int id, String name, String description, EventOption optionOne, EventOption optionTwo,
                  int commissionRate, CommissionMode commissionMode, int liquidityParameter,
-                 MarketMakerAccount marketMakerAccount, EventStatus status) {
+                 MarketMakerAccount marketMakerAccount, EventStatus status,
+                 TradingMethod tradingMethod, OrderBookMarket orderBook) {
         this.id = id;
         this.name = name;
         this.description = description;
@@ -43,6 +51,8 @@ public final class Event implements Serializable {
         this.marketMakerAccount = marketMakerAccount;
         this.status = status;
         this.tradeHistory = new ArrayList<>();
+        this.tradingMethod = tradingMethod;
+        this.orderBook = orderBook;
     }
 
     public int getId() {
@@ -127,5 +137,14 @@ public final class Event implements Serializable {
     // Assigns this event's market maker; called exactly once by EventsFileLoader while cross-referencing GM-users.
     public void assignMarketMaker(String username) {
         this.marketMakerUsername = username;
+    }
+
+    public TradingMethod getTradingMethod() {
+        return tradingMethod;
+    }
+
+    // This event's Order Book state, or null if it's an LMSR event — callers must branch on getTradingMethod() first.
+    public OrderBookMarket getOrderBook() {
+        return orderBook;
     }
 }

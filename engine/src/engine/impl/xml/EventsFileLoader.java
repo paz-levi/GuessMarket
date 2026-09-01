@@ -20,11 +20,13 @@ import org.w3c.dom.NodeList;
 import org.xml.sax.SAXException;
 
 import dto.EventStatus;
+import dto.TradingMethod;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.User;
+import engine.domain.orderbook.OrderBookMarket;
 import exception.XmlValidationException;
 
 // Loads, parses, and validates an events XML file into a list of fresh domain Events; never touches EngineImpl's live state itself.
@@ -45,6 +47,10 @@ public final class EventsFileLoader {
     private static final String TAG_GM_METHOD = "GM-method";
     private static final String TAG_GM_LMSR = "GM-LMSR";
     private static final String TAG_B = "b";
+    private static final String TAG_GM_ORDER_BOOK = "GM-order-book";
+    private static final String ATTRIBUTE_INITIAL = "initial";
+    private static final String ATTRIBUTE_D = "d";
+    private static final String ATTRIBUTE_ALLOW_MINT = "allow-mint";
     private static final String TAG_GM_USERS = "GM-users";
     private static final String TAG_GM_USER = "GM-user";
     private static final String TAG_INITIAL_CASH = "initial-cash";
@@ -144,16 +150,55 @@ public final class EventsFileLoader {
 
         Element methodElement = firstChildElementByTag(eventElement, TAG_GM_METHOD);
         Element lmsrElement = firstChildElementByTag(methodElement, TAG_GM_LMSR);
-        if (lmsrElement == null) {
-            throw new XmlValidationException("Event id " + id + " does not use GM-LMSR; "
-                    + "Order Book events are not yet supported in this build.");
-        }
-        int liquidityParameter = parseIntContent(firstChildElementByTag(lmsrElement, TAG_B));
-        // Starts at 0, not the subsidy: the subsidy only moves from the MM's own balance once EngineImpl.openEvent() actually opens this event.
+        Element orderBookElement = firstChildElementByTag(methodElement, TAG_GM_ORDER_BOOK);
+
+        // Starts at 0 either way: the MM's opening payment (LMSR subsidy or the Order Book's initial) only moves from
+        // their own balance once EngineImpl.openEvent() actually opens this event.
         MarketMakerAccount marketMakerAccount = new MarketMakerAccount(0.0);
 
-        return new Event(id, name, description, optionOne, optionTwo, commissionRate, commissionMode,
-                liquidityParameter, marketMakerAccount, EventStatus.NOT_STARTED);
+        if (lmsrElement != null) {
+            int liquidityParameter = parseIntContent(firstChildElementByTag(lmsrElement, TAG_B));
+            return new Event(id, name, description, optionOne, optionTwo, commissionRate, commissionMode,
+                    liquidityParameter, marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.LMSR, null);
+        }
+        if (orderBookElement != null) {
+            // liquidityParameter is 0 and unread for an Order Book event -- the mirror image of orderBook being null for LMSR.
+            return new Event(id, name, description, optionOne, optionTwo, commissionRate, commissionMode,
+                    0, marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.ORDER_BOOK,
+                    buildOrderBookMarket(orderBookElement, id));
+        }
+        throw new XmlValidationException("Event id " + id + " has a " + TAG_GM_METHOD
+                + " element containing neither " + TAG_GM_LMSR + " nor " + TAG_GM_ORDER_BOOK + ".");
+    }
+
+    // Reads and validates a GM-order-book element's attributes into the event's Order Book configuration.
+    private static OrderBookMarket buildOrderBookMarket(Element orderBookElement, int id) {
+        int initial = parseIntAttribute(orderBookElement, ATTRIBUTE_INITIAL, id);
+        int d = parseIntAttribute(orderBookElement, ATTRIBUTE_D, id);
+        // d drives both the price ceiling (d - 0.01) and the initial/d share-pair count, so a non-positive d would
+        // produce a negative ceiling and a divide-by-zero. The XSD permits it; this is our own business-rule check.
+        if (d <= 0) {
+            throw new XmlValidationException("Event id " + id + " has " + TAG_GM_ORDER_BOOK + " d=" + d
+                    + ", which must be greater than 0.");
+        }
+        // The schema explicitly allows initial="0" (an event opening with no initial share stock); only negative is invalid.
+        if (initial < 0) {
+            throw new XmlValidationException("Event id " + id + " has " + TAG_GM_ORDER_BOOK + " initial=" + initial
+                    + ", which must not be negative.");
+        }
+        boolean allowMint = Boolean.parseBoolean(orderBookElement.getAttribute(ATTRIBUTE_ALLOW_MINT).trim());
+        return new OrderBookMarket(initial, d, allowMint);
+    }
+
+    // Reads one required integer attribute off an element, reporting a specific message rather than a raw NumberFormatException.
+    private static int parseIntAttribute(Element element, String attributeName, int id) {
+        String raw = element.getAttribute(attributeName).trim();
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException e) {
+            throw new XmlValidationException("Event id " + id + " has " + TAG_GM_ORDER_BOOK + " " + attributeName
+                    + "=\"" + raw + "\", which is not a valid integer.");
+        }
     }
 
     // Reads and validates an event's GM-option names, enforcing the exactly-two-options business rule.

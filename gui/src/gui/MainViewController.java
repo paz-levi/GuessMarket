@@ -240,8 +240,9 @@ public class MainViewController {
             container.getChildren().clear();
             appendEventStatusDisplay(container, status);
             container.getChildren().add(new Separator());
-            container.getChildren().add(buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
-                    username, newStatus -> refreshUserDetailsAfterPurchase(username, eventId)));
+            // Same status gating as the Events tab: never show a control that can only fail.
+            container.getChildren().add(buildActionControl(status, username,
+                    newStatus -> refreshUserDetailsAfterPurchase(username, eventId)));
         } catch (GuessMarketException e) {
             showErrorAlert("Could not load event details", e);
         }
@@ -262,8 +263,52 @@ public class MainViewController {
         eventDetailsBox.getChildren().clear();
         appendEventStatusDisplay(eventDetailsBox, status);
         eventDetailsBox.getChildren().add(new Separator());
-        eventDetailsBox.getChildren().add(buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
-                null, this::renderEventDetails));
+        // The action control is driven by status: only ever show the one thing that can actually succeed right now.
+        eventDetailsBox.getChildren().add(buildActionControl(status, null, this::renderEventDetails));
+    }
+
+    // Picks the one action control that makes sense for an event's current status: a NOT_STARTED event can only be
+    // opened (by its MM), an ACTIVE one can only be traded on, and a CLOSED one accepts neither. fixedUsername is the
+    // Users tab's already-selected user, or null on the Events tab where a picker is needed instead.
+    private VBox buildActionControl(EventStatusDto status, String fixedUsername, Consumer<EventStatusDto> onSuccess) {
+        return switch (status.status()) {
+            case NOT_STARTED -> fixedUsername == null
+                    ? buildOpenEventForm(status.eventId(), onSuccess)
+                    // The Users tab deliberately has no Open control (scoped to the Events tab), so it just explains why.
+                    : new VBox(new Label("This event has not been opened yet — its market maker can open it from the Events tab."));
+            case ACTIVE -> buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
+                    fixedUsername, onSuccess);
+            case CLOSED -> new VBox(new Label("This event is closed and no longer accepts trades."));
+        };
+    }
+
+    // Builds the "open this event" control: a user picker plus the button. Only the event's assigned market maker can
+    // succeed — the engine enforces that, so this deliberately doesn't try to pre-filter the list to likely MMs.
+    private VBox buildOpenEventForm(int eventId, Consumer<EventStatusDto> onSuccess) {
+        ComboBox<String> usernameComboBox = buildUsernameComboBox();
+        Button openButton = new Button("Open Event");
+        openButton.setOnAction(event -> handleOpenEventClick(eventId, usernameComboBox, onSuccess));
+
+        return new VBox(6, new Label("Open this event (market maker only):"),
+                new HBox(8, usernameComboBox, openButton));
+    }
+
+    // Opens the event via the existing IEngine.openEvent, then redraws through the caller's own callback and refreshes
+    // both lists — opening moves money from the MM into the event account, so balances change.
+    private void handleOpenEventClick(int eventId, ComboBox<String> usernameComboBox, Consumer<EventStatusDto> onSuccess) {
+        String username = usernameComboBox.getSelectionModel().getSelectedItem();
+        if (username == null || username.isBlank()) {
+            showErrorAlert("Invalid input", "Select the user opening this event.");
+            return;
+        }
+        try {
+            EventStatusDto opened = engine.openEvent(eventId, username);
+            onSuccess.accept(opened);
+            refreshEventsList();
+            refreshUsersList();
+        } catch (GuessMarketException e) {
+            showErrorAlert("Could not open the event", e);
+        }
     }
 
     // Appends the read-only event status display (prices/shares, account state, winner-if-closed, trade history) to the

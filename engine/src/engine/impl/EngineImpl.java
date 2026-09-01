@@ -3,14 +3,20 @@ package engine.impl;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import dto.EventFilterDto;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
 import dto.EventStatus;
+import dto.OrderBookSnapshotDto;
 import dto.OrderDto;
+import dto.OrderResultDto;
+import dto.OrderSide;
+import dto.ParticipantDto;
 import dto.SubmitOrderRequestDto;
 import dto.TradeConfirmationDto;
 import dto.TradeRecordDto;
@@ -26,8 +32,11 @@ import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
 import engine.domain.User;
 import engine.domain.lmsr.LmsrMath;
+import engine.domain.orderbook.OptionBook;
+import engine.domain.orderbook.Order;
 import engine.impl.state.LoadedState;
 import engine.impl.state.StateFileManager;
+import engine.impl.trading.OrderBookExecutor;
 import engine.impl.trading.TradeExecutor;
 import engine.impl.xml.EventsFileLoader;
 import engine.impl.xml.LoadedFile;
@@ -75,11 +84,10 @@ public class EngineImpl implements IEngine {
 
     // Maps a domain Event to the DTO shape ui is allowed to see.
     private static EventSummaryDto toSummaryDto(Event event) {
-        // Every event EngineImpl currently builds is LMSR-only pre-Ex2; Order Book events will set this properly once that loading path exists.
         return new EventSummaryDto(event.getId(), event.getName(), event.getDescription(),
                 event.getCommissionRate(), toDtoCommissionMode(event.getCommissionMode()),
                 event.getOptionOne().getName(), event.getOptionTwo().getName(), event.getStatus(),
-                TradingMethod.LMSR);
+                event.getTradingMethod());
     }
 
     // Maps the domain-internal commission mode enum to the dto-level one ui is allowed to see.
@@ -101,6 +109,14 @@ public class EngineImpl implements IEngine {
             throws InvalidCommandStateException, EventNotFoundException, IllegalTradeException,
             UserNotFoundException, UserBlockedException {
         Event event = findActiveEvent(eventId);
+        // Without this, TradeExecutor's LMSR overflow guard catches Order Book events only by accident: their
+        // liquidityParameter is 0, so its `shares / b` check divides by zero, yields Infinity, and always trips --
+        // reporting "purchase quantity too large, try a smaller quantity", which misdiagnoses the problem and gives
+        // advice that can never work. Same defensive-guard pattern as closeEvent's and submitOrder's.
+        if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
+            throw new IllegalTradeException("Event id " + eventId
+                    + " is an Order Book event; LMSR participation is not valid for it. Use submitOrder instead.");
+        }
         User buyer = users.get(username);
         if (buyer == null) {
             throw new UserNotFoundException("No user named \"" + username + "\" is currently loaded.");
@@ -118,6 +134,13 @@ public class EngineImpl implements IEngine {
     public EventStatusDto closeEvent(int eventId, int winningOptionNumber)
             throws EventNotFoundException, IllegalTradeException, InvalidCommandStateException {
         Event event = findActiveEvent(eventId);
+        // TradeExecutor.close() is pure LMSR settlement math (it pays the winning option's outstanding shares out of
+        // the MM account). Running it on an Order Book event would silently produce nonsense, so it is refused until
+        // Order Book settlement is actually implemented.
+        if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
+            throw new IllegalTradeException("Event id " + eventId
+                    + " is an Order Book event; closing Order Book events is not yet supported in this build.");
+        }
         TradeExecutor.close(event, winningOptionNumber);
         return toStatusDto(event);
     }
@@ -163,17 +186,34 @@ public class EngineImpl implements IEngine {
         return event;
     }
 
-    // Builds the full "event trading status" DTO from a domain Event: both option prices, current holdings, account state, and trade history newest-first.
+    // Builds the full "event trading status" DTO from a domain Event: both option prices, current holdings, account
+    // state, and trade history newest-first — plus, for an Order Book event, its books and participants.
     private static EventStatusDto toStatusDto(Event event) {
         EventOption optionOne = event.getOptionOne();
         EventOption optionTwo = event.getOptionTwo();
-        double liquidityParameter = event.getLiquidityParameter();
-        double priceOne = LmsrMath.price(optionOne.getSharesOutstanding(), optionTwo.getSharesOutstanding(), liquidityParameter);
-        double priceTwo = LmsrMath.price(optionTwo.getSharesOutstanding(), optionOne.getSharesOutstanding(), liquidityParameter);
+        boolean isOrderBook = event.getTradingMethod() == TradingMethod.ORDER_BOOK;
+
+        // LMSR pricing must not run for an Order Book event: its liquidityParameter is 0, so LmsrMath.price would
+        // divide by zero, giving exp(Infinity)/exp(Infinity) = NaN for every price shown.
+        double priceOne;
+        double priceTwo;
+        if (isOrderBook) {
+            // An order book has no curve price. These two fields are primitive doubles kept for LMSR-shaped consumers,
+            // so they cannot express "no price": for an Order Book event 0.0 means "no trade yet", NOT a real price of
+            // zero. Order Book consumers should read orderBooks[i].lastPrice() instead, which is a boxed Double and is
+            // properly null when untraded. Deliberately not boxed here -- the OB UI stage will branch on tradingMethod
+            // and stop reading these fields for OB events entirely, so partial null-safety now would be thrown away.
+            priceOne = lastTradePriceOrZero(event.getOrderBook().getBookOne());
+            priceTwo = lastTradePriceOrZero(event.getOrderBook().getBookTwo());
+        } else {
+            double liquidityParameter = event.getLiquidityParameter();
+            priceOne = LmsrMath.price(optionOne.getSharesOutstanding(), optionTwo.getSharesOutstanding(), liquidityParameter);
+            priceTwo = LmsrMath.price(optionTwo.getSharesOutstanding(), optionOne.getSharesOutstanding(), liquidityParameter);
+        }
+
         MarketMakerAccount account = event.getMarketMakerAccount();
         EventOption winningOption = event.getWinningOption();
 
-        // Every event EngineImpl currently builds is LMSR-only pre-Ex2, so the order-book fields stay empty.
         return new EventStatusDto(
                 event.getId(), event.getName(), event.getStatus(),
                 optionOne.getName(), optionTwo.getName(),
@@ -182,7 +222,62 @@ public class EngineImpl implements IEngine {
                 account.getBalance(), account.getTotalCommissionCollected(),
                 winningOption != null ? winningOption.getName() : null,
                 toTradeRecordDtosNewestFirst(event),
-                TradingMethod.LMSR, List.of(), List.of());
+                event.getTradingMethod(),
+                isOrderBook ? toOrderBookSnapshots(event) : List.of(),
+                isOrderBook ? toParticipantDtos(event) : List.of());
+    }
+
+    private static double lastTradePriceOrZero(OptionBook book) {
+        return book.getLastTradePrice() != null ? book.getLastTradePrice() : 0.0;
+    }
+
+    // One snapshot per option: its resting orders in priority order plus the LAST/BID/ASK/MID/SPREAD statistics.
+    private static List<OrderBookSnapshotDto> toOrderBookSnapshots(Event event) {
+        return List.of(
+                toOrderBookSnapshot(event.getOptionOne().getName(), event.getOrderBook().getBookOne()),
+                toOrderBookSnapshot(event.getOptionTwo().getName(), event.getOrderBook().getBookTwo()));
+    }
+
+    // MID and SPREAD stay null unless both sides have liquidity — an empty side makes them undefined, not zero.
+    private static OrderBookSnapshotDto toOrderBookSnapshot(String optionName, OptionBook book) {
+        Double bid = book.getBestBidPrice();
+        Double ask = book.getBestAskPrice();
+        boolean twoSided = bid != null && ask != null;
+        return new OrderBookSnapshotDto(optionName,
+                toOrderDtos(book.getBids()), toOrderDtos(book.getAsks()),
+                book.getLastTradePrice(), bid, ask,
+                twoSided ? (bid + ask) / 2 : null,
+                twoSided ? ask - bid : null);
+    }
+
+    private static List<OrderDto> toOrderDtos(List<Order> orders) {
+        return orders.stream()
+                .map(order -> new OrderDto(order.getUsername(), order.getSide(), order.getQuantity(), order.getPrice()))
+                .toList();
+    }
+
+    // One row per user currently holding shares of either option. Value is marked at that option's last traded price
+    // (0 before any trade) — the same figure the top-level per-option price uses, kept consistent between the two.
+    private static List<ParticipantDto> toParticipantDtos(Event event) {
+        OptionBook bookOne = event.getOrderBook().getBookOne();
+        OptionBook bookTwo = event.getOrderBook().getBookTwo();
+        double priceOne = lastTradePriceOrZero(bookOne);
+        double priceTwo = lastTradePriceOrZero(bookTwo);
+
+        Set<String> holders = new LinkedHashSet<>(bookOne.getHoldings().keySet());
+        holders.addAll(bookTwo.getHoldings().keySet());
+
+        List<ParticipantDto> participants = new ArrayList<>();
+        for (String username : holders) {
+            double sharesOne = bookOne.getHolding(username);
+            double sharesTwo = bookTwo.getHolding(username);
+            if (sharesOne == 0 && sharesTwo == 0) {
+                continue;
+            }
+            participants.add(new ParticipantDto(username,
+                    sharesOne, sharesOne * priceOne, sharesTwo, sharesTwo * priceTwo));
+        }
+        return participants;
     }
 
     // Maps an event's trade history to DTOs, newest-first (reversing the chronological storage order).
@@ -300,23 +395,75 @@ public class EngineImpl implements IEngine {
 
         // Guaranteed present: an event's marketMakerUsername can only ever be a name EventsFileLoader actually parsed as a GM-user.
         User marketMaker = users.get(username);
-        double subsidy = LmsrMath.initialSubsidy(event.getLiquidityParameter());
-        if (marketMaker.getBalance() < subsidy) {
+        // Both methods debit the MM and credit the event account identically; only the amount differs (and Order Book
+        // additionally hands the MM the share stock that payment bought).
+        boolean isOrderBook = event.getTradingMethod() == TradingMethod.ORDER_BOOK;
+        double openingCost = isOrderBook
+                ? event.getOrderBook().getInitial()
+                : LmsrMath.initialSubsidy(event.getLiquidityParameter());
+        if (marketMaker.getBalance() < openingCost) {
             throw new IllegalTradeException("User \"" + username + "\" cannot afford to open event id " + eventId
-                    + ": subsidy " + subsidy + " exceeds balance " + marketMaker.getBalance() + ".");
+                    + ": opening cost " + openingCost + " exceeds balance " + marketMaker.getBalance() + ".");
         }
 
-        marketMaker.debit(subsidy);
-        event.getMarketMakerAccount().credit(subsidy);
+        marketMaker.debit(openingCost);
+        event.getMarketMakerAccount().credit(openingCost);
+        if (isOrderBook) {
+            // initial/d share-pairs: one share of each option per pair. This is the only place outside a mint where
+            // an Order Book event's share supply grows, so both options' outstanding counts move together.
+            double pairs = openingCost / event.getOrderBook().getD();
+            event.getOrderBook().allocateInitialShares(username, pairs);
+            event.getOptionOne().addShares(pairs);
+            event.getOptionTwo().addShares(pairs);
+        }
         event.open();
         return toStatusDto(event);
     }
 
-    // Not yet implemented — Ex2 skeleton stage stub.
+    // Submits an order-book order on username's behalf: matches it against the book and rests any remainder.
     @Override
-    public OrderDto submitOrder(SubmitOrderRequestDto request)
-            throws EventNotFoundException, InvalidCommandStateException, IllegalTradeException, UserBlockedException {
-        throw new UnsupportedOperationException("submitOrder not yet implemented");
+    public OrderResultDto submitOrder(SubmitOrderRequestDto request)
+            throws EventNotFoundException, InvalidCommandStateException, IllegalTradeException,
+            UserNotFoundException, UserBlockedException {
+        Event event = findActiveEvent(request.eventId());
+        if (event.getTradingMethod() != TradingMethod.ORDER_BOOK) {
+            throw new IllegalTradeException("Event id " + request.eventId()
+                    + " is an LMSR event; use participateInEvent to trade on it, not submitOrder.");
+        }
+        User trader = users.get(request.username());
+        if (trader == null) {
+            throw new UserNotFoundException("No user named \"" + request.username() + "\" is currently loaded.");
+        }
+        if (trader.isBlocked()) {
+            throw new UserBlockedException("User \"" + request.username()
+                    + "\" is blocked (balance below zero) and cannot perform this action.");
+        }
+        List<Trade> fills = OrderBookExecutor.submit(event, trader, request.optionNumber(), request.side(),
+                request.quantity(), request.price(), users);
+        return toOrderResultDto(event, request, fills);
+    }
+
+    // Builds the submitting user's receipt: what filled (possibly at several prices), what still rests, and the
+    // event's resulting state. Commission is only theirs when they were the buyer -- see OrderBookExecutor.
+    private OrderResultDto toOrderResultDto(Event event, SubmitOrderRequestDto request, List<Trade> fills) {
+        double quantityFilled = 0;
+        double totalValue = 0;
+        double fillsCommission = 0;
+        List<TradeRecordDto> fillDtos = new ArrayList<>(fills.size());
+        for (Trade fill : fills) {
+            quantityFilled += fill.getQuantity();
+            totalValue += fill.getQuantity() * fill.getPricePerShare();
+            fillsCommission += fill.getCommissionPaid();
+            fillDtos.add(toTradeRecordDto(fill));
+        }
+        boolean submitterIsBuyer = request.side() == OrderSide.BUY;
+        double commissionPaid = submitterIsBuyer ? fillsCommission : 0.0;
+        double totalPaid = submitterIsBuyer ? totalValue + commissionPaid : totalValue;
+        Double averageFillPrice = quantityFilled > 0 ? totalValue / quantityFilled : null;
+
+        return new OrderResultDto(event.getOption(request.optionNumber()).getName(), request.side(),
+                quantityFilled, request.quantity() - quantityFilled, totalValue, commissionPaid, totalPaid,
+                averageFillPrice, fillDtos, toStatusDto(event));
     }
 
     // Not yet implemented — Ex2 skeleton stage stub.

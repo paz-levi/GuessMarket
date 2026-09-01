@@ -5,7 +5,7 @@ import java.util.List;
 import dto.EventFilterDto;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
-import dto.OrderDto;
+import dto.OrderResultDto;
 import dto.SubmitOrderRequestDto;
 import dto.TradeConfirmationDto;
 import dto.UserDetailDto;
@@ -63,9 +63,11 @@ public interface IEngine {
     EventStatusDto openEvent(int eventId, String username)
             throws EventNotFoundException, InvalidCommandStateException, UnauthorizedMarketMakerException, IllegalTradeException;
 
-    // Submits an order-book order (buy or sell) for one option of an event and returns the resulting order.
-    OrderDto submitOrder(SubmitOrderRequestDto request)
-            throws EventNotFoundException, InvalidCommandStateException, IllegalTradeException, UserBlockedException;
+    // Submits an order-book order (buy or sell) for one option of an event: matches it against the book, rests any
+    // remainder, and returns what filled, what's still resting, and the event's resulting state.
+    OrderResultDto submitOrder(SubmitOrderRequestDto request)
+            throws EventNotFoundException, InvalidCommandStateException, IllegalTradeException,
+            UserNotFoundException, UserBlockedException;
 
     // Returns a summary of every currently loaded event matching the given filter (null fields on the filter mean "all" for that dimension).
     List<EventSummaryDto> listEvents(EventFilterDto filter) throws InvalidCommandStateException;

@@ -23,7 +23,8 @@ flowchart TD
                 EventsFileLoader["EventsFileLoader"]
             end
             subgraph TRADING["engine.impl.trading"]
-                TradeExecutor["TradeExecutor"]
+                TradeExecutor["TradeExecutor (LMSR)"]
+                OrderBookExecutor["OrderBookExecutor (Order Book)"]
             end
             subgraph STATE["engine.impl.state"]
                 StateFileManager["StateFileManager"]
@@ -39,6 +40,11 @@ flowchart TD
             CommissionMode["CommissionMode"]
             subgraph LMSR["engine.domain.lmsr"]
                 LmsrMath["LmsrMath"]
+            end
+            subgraph OB["engine.domain.orderbook"]
+                OrderBookMarket["OrderBookMarket"]
+                OptionBook["OptionBook"]
+                Order["Order"]
             end
         end
 
@@ -148,6 +154,11 @@ flowchart TD
   closing the last deliberately-deferred gap noted above — `closeEvent` still lacks one (out
   of this stage's scope). Also gains `UserNotFoundException`/`UserBlockedException` on its
   throws clause — `UserBlockedException`'s first real use anywhere in the codebase.
+  **Order Book core stage:** `submitOrder`'s return type changed from the scaffolded `OrderDto`
+  to the new `OrderResultDto` (see that entry — `OrderDto` describes a *resting* order, which a
+  fully-filled order doesn't have), and it gained `UserNotFoundException` alongside its existing
+  `UserBlockedException`. Its `SubmitOrderRequestDto` parameter is unchanged. No other method's
+  signature moved.
 
 ### `engine.impl` package
 
@@ -245,6 +256,47 @@ flowchart TD
   (reserved for Order Book). Deliberately **not** filtered to `EventStatus.ACTIVE` — a
   `CLOSED` event the user participated in still appears, per
   `exercise2-requirements.md`'s own worked description of what a closed entry shows.
+  **Order Book core stage:** `submitOrder` is real (returns `OrderResultDto`), and three
+  existing methods gained branches:
+  - `openEvent` computes one `openingCost` variable by method — `initial` for Order Book,
+    `LmsrMath.initialSubsidy(b)` for LMSR — then runs the *identical* affordability check,
+    debit and credit for both. Order Book additionally calls `allocateInitialShares()` and
+    bumps both options' outstanding counts by `initial / d` pairs; that is the only place
+    outside a mint where an Order Book event's share supply grows.
+  - `participateInEvent` **refuses Order Book events** with `IllegalTradeException` ("use
+    submitOrder instead"). Without it the rejection happened only *by accident*: an Order Book
+    event's `liquidityParameter` is `0`, so `TradeExecutor`'s overflow guard divides by zero,
+    gets `Infinity`, and always trips — reporting "purchase quantity too large… try a smaller
+    quantity", which misdiagnoses the problem and gives advice that can never work (no
+    quantity succeeds, because LMSR participation is meaningless on an order book). Reachable
+    in practice: the Events tab used to show a Buy form for every event regardless of method.
+  - `closeEvent` **refuses Order Book events** with `IllegalTradeException`.
+    `TradeExecutor.close()` is pure LMSR settlement (it pays the winning option's outstanding
+    shares out of the MM account); running it on an Order Book event would silently produce
+    nonsense rather than fail. Order Book settlement is a later stage — and one that still has
+    an open spec question about what happens to resting orders at close (see `CLAUDE.md`
+    Section 8), so guarding was the only honest option here.
+  - **`toStatusDto`/`toSummaryDto` — a real latent bug fixed, not just an extension.** Both
+    hardcoded `TradingMethod.LMSR`, and `toStatusDto` called `LmsrMath.price(...)`
+    unconditionally. An Order Book event's `liquidityParameter` is `0`, so that path computed
+    `Math.exp(x/0)` = `Infinity`, then `Infinity/Infinity` = **`NaN` for every price shown**.
+    They now report the event's actual method, and `toStatusDto` skips LMSR pricing entirely
+    for Order Book events — reporting each option's last traded price instead, with the real
+    detail in the per-option snapshots. **Decision recorded, since it looks like an
+    inconsistency otherwise:** `optionOnePrice`/`optionTwoPrice` are primitive `double`, so for
+    an Order Book event `0.0` means *"no trade yet"*, not a real price of zero — unlike
+    `OrderBookSnapshotDto`'s boxed `Double` fields, which are correctly `null` when
+    unavailable. They were deliberately **not** boxed to match: the frozen `ui.Main` reads them
+    via `formatDecimal(double)` and would NPE on a null (and per the lecturer needn't work
+    against Ex2 files at all), while `MainViewController`'s detail panel needs a full
+    `tradingMethod` branch in the Order Book UI stage regardless — at which point it reads
+    `orderBooks[i].lastPrice()` and stops reading these two fields for OB events entirely, so
+    any partial null-safety added now would be thrown away. Order Book consumers should read
+    the snapshots, not these fields. It also populates `orderBooks`
+    (resting orders in priority order plus LAST/BID/ASK/MID/SPREAD, where **MID and SPREAD stay
+    `null` unless both sides have liquidity** — an empty side makes them undefined, not zero,
+    exactly as the appendix requires) and `participants` (one row per user holding shares of
+    either option, valued at that option's last traded price). Both stay empty for LMSR events.
 
 ### `engine.domain` package
 
@@ -367,6 +419,16 @@ the intentionally top-level, `ui`-facing packages.
   **openEvent implementation stage:** gained `open()`, mirroring `close()`'s exact pattern —
   the only way status transitions `NOT_STARTED` → `ACTIVE`, called exclusively by
   `EngineImpl.openEvent()` after authorization/status/affordability all pass.
+  **Order Book core stage:** gained `tradingMethod` (never null) and `orderBook` (an
+  `engine.domain.orderbook.OrderBookMarket`, **null for LMSR events**) — composition, not a
+  subclass, so `Event` stays one type everywhere. The two method-specific fields are exact
+  mirrors of each other: `liquidityParameter` is meaningful only for LMSR, `orderBook` only for
+  Order Book, and every reader branches on `getTradingMethod()` first. `liquidityParameter`
+  was deliberately left inline rather than moved into a symmetric `LmsrMarket` object — the
+  symmetric version is tidier but would touch `TradeExecutor`, three `EngineImpl` mappers,
+  `EventsFileLoader` and both test files, all working and tested, for a cosmetic gain.
+  `orderBook` is also null on `.gmstate` files written before Order Book existed, the same
+  null-safety already relied on for `Trade.buyerUsername` and `EngineStateSnapshot.users`.
 
 #### `User` (`engine/src/engine/domain/User.java`) — Ex2 Users-engine-logic stage, new
 - **What it is:** One registered user's account — a `name` and a `balance`, plus a derived
@@ -410,6 +472,56 @@ the intentionally top-level, `ui`-facing packages.
   liquidityParameter)` — `C(0,0) = b · ln(2)`, moved (not duplicated) from a private helper
   that used to live in `EventsFileLoader`. Needed in a second place now (`EngineImpl.openEvent`),
   so it belongs in this shared math utility rather than being copy-pasted into both callers.
+
+### `engine.domain.orderbook` package — Order Book core stage, new
+
+Isolates every Order Book concept in its own package, exactly as `engine.domain.lmsr` isolates
+LMSR. The two mechanisms share **no** pricing code: LMSR prices from a curve, an order book
+prices from whatever counterparties are actually resting. All three classes are `Serializable`
+(+ `serialVersionUID = 1L`) because they hang off `Event`, which `StateFileManager` serializes.
+
+#### `Order` (`engine/src/engine/domain/orderbook/Order.java`)
+- **What it is:** One resting order — username, side, price, remaining quantity, and a
+  `sequence` number. Quantity is the one mutable field: it shrinks via `reduceQuantity()` as
+  the order is partially filled, and the order leaves its book at zero.
+- **Why it exists:** The unit of book state. `dto.OrderDto` is its display-side counterpart —
+  same four visible fields, minus the sequence, which is internal bookkeeping `ui` never needs.
+- **What it connects to:** Held in an `OptionBook`'s bid or ask list; created by
+  `OrderBookExecutor` when an order (or a remainder of one) rests. **`sequence` is a monotonic
+  counter from `OrderBookMarket`, deliberately not a timestamp** — `LocalDateTime.now()` can
+  collide at millisecond resolution, which would silently make time priority between two
+  equally-priced orders non-deterministic.
+
+#### `OptionBook` (`engine/src/engine/domain/orderbook/OptionBook.java`)
+- **What it is:** One option's independent book: a bid list, an ask list, its last traded
+  price (`null` until the first trade), and a `username → shares` holdings map.
+- **Why it exists:** The spec gives each option its own book; this is that, plus the holdings
+  that make `ParticipantDto` and the sell-requires-shares rule possible. Holdings live per
+  option because that's exactly the granularity both of those need.
+- **What it connects to:** **Both sides are kept sorted best-first** (bids price-DESC, asks
+  price-ASC, each tie-broken by `sequence` ASC), so index 0 is always the best price and
+  `OrderBookExecutor`'s matching loop can stay side-agnostic via `oppositeSideFor()`.
+  Deliberately a sorted `ArrayList` rather than a `PriorityQueue`: `EngineImpl` renders the
+  whole book *in priority order* on every `getEventStatus`, which a `PriorityQueue` cannot
+  iterate, and `n` here is a handful of orders — so the O(n) sorted insert costs nothing while
+  keeping the matching loop readable. `getBids()`/`getAsks()`/`getHoldings()` hand back
+  unmodifiable views so nothing outside can mutate a book by holding its list.
+
+#### `OrderBookMarket` (`engine/src/engine/domain/orderbook/OrderBookMarket.java`)
+- **What it is:** An Order Book event's whole trading state: its `GM-order-book` config
+  (`initial`, `d`, `allowMint`), one `OptionBook` per option, and the `nextSequence()` counter.
+- **Why it exists:** Composed onto `Event` as a single nullable field rather than scattering
+  four Order-Book-only fields across it, and rather than subclassing `Event` — there's no real
+  is-a relationship to justify inheritance (CLAUDE.md Section 5), and a subclass would fracture
+  `Map<Integer, Event>`, `StateFileManager`, `LoadedFile`, and every existing mapper. Mirrors
+  how `MarketMakerAccount` is *already* a composed sub-object of `Event`.
+- **What it connects to:** `Event.getOrderBook()` (null for LMSR events — the mirror image of
+  `liquidityParameter` being meaningless for Order Book ones). `getMaxOrderPrice()` returns
+  `d - 0.01`, the spec's price ceiling. `allocateInitialShares()` is the MM's **initial
+  allocation** at open — `initial / d` share-pairs, one share of each option per pair — kept a
+  deliberately distinct code path from peer-to-peer mint, as the appendix warns. Holding *both*
+  books here is also what will let the later mint stage pair a bid on one option against a bid
+  on the other **without restructuring anything**.
 
 ### `engine.impl.xml` package
 
@@ -466,6 +578,15 @@ the intentionally top-level, `ui`-facing packages.
     instead: `test_files/ex2-users-lmsr-only.xml` (LMSR-only, includes a user who is MM for
     multiple events at once) plus a set of small synthetic negative-case files exercised
     through a throwaway harness, one per validation rule.
+  - **Order Book core stage — the rejection guard below is now gone.** `buildEvent()` branches
+    on which child `GM-method` actually contains: `GM-LMSR` → parse `b` as before;
+    `GM-order-book` → parse `@initial`/`@d`/`@allow-mint` into an `OrderBookMarket`; **neither**
+    → still a hard `XmlValidationException`, since that's a genuinely malformed file (the guard
+    changed target rather than simply disappearing). Two new business-rule checks the XSD
+    doesn't make: `d > 0` (a non-positive `d` would give a *negative* price ceiling of
+    `d - 0.01` and divide-by-zero on `initial / d`) and `initial >= 0` (the schema explicitly
+    permits `initial="0"`, so only negative is invalid). Attribute parsing goes through a
+    helper that reports a specific message instead of leaking a raw `NumberFormatException`.
   - **openEvent implementation stage — correction to this entry's own "What it connects to"
     bullet above:** `buildEvent()` no longer computes the initial LMSR subsidy or funds
     `MarketMakerAccount` with it at load time — that was an Ex1 leftover from when events
@@ -544,6 +665,46 @@ the intentionally top-level, `ui`-facing packages.
   anything on any failure, so `EngineImpl` only clears and repopulates its live `events` field
   after the new state is fully known-good — a failed load never touches previously-loaded state,
   identical guarantee to Command 1.
+
+#### `OrderBookExecutor` (`engine/src/engine/impl/trading/OrderBookExecutor.java`) — Order Book core stage, new
+- **What it is:** The Order Book counterpart to `TradeExecutor`: one `submit()` entry point
+  that validates an order, matches it against the book, and rests any remainder. Returns one
+  `Trade` per fill, in execution order.
+- **Why it exists:** Same reasoning that keeps `TradeExecutor` separate from `EngineImpl` —
+  `EngineImpl.submitOrder()` stays a thin lookup-and-delegate, and every Order Book trading
+  rule lives in exactly one place. Deliberately a *separate class* from `TradeExecutor` rather
+  than a branch inside it: the two share no pricing math whatsoever, so merging them would
+  produce a class that's really two classes wearing a trenchcoat.
+- **What it connects to:** Called by `EngineImpl.submitOrder()` after it has resolved the
+  event (exists / `ACTIVE` / actually Order Book) and the user (exists / not blocked). Like
+  `TradeExecutor` it takes already-resolved domain objects and never looks events up itself —
+  with one honest exception: it receives the `Map<String, User> users` because a fill has *two*
+  parties, and the resting counterparty can only be reached by the username on their order.
+  - **The matching rule, stated twice by the appendix and enforced in one place here:** every
+    fill executes at the **resting order's own price**, never the incoming order's limit. The
+    limit is only a boundary on which prices the incoming order will accept — which is why a
+    marketable order can do better than its own limit (the appendix's Zoe walks two bids at
+    `$0.50` and `$0.48` against a `$0.45` floor and nets `$14.80`).
+  - **Commission follows the buyer of each fill, not the submitter.** An incoming *sell*
+    therefore pays none itself while each resting buyer it fills against pays theirs. Confirmed
+    against the appendix's own numbers, where the seller receives the full gross. Charged only
+    under `ON_PURCHASE`; `ON_CLOSE` settles at close instead.
+  - **Unlike LMSR, the event account is not the counterparty** — money moves peer-to-peer
+    between the two users, and `MarketMakerAccount` only ever sees commission (plus the MM's
+    `initial` at open). A fill also **never changes share supply**; it only transfers existing
+    holdings between users.
+  - **Validation, all before any mutation:** option number 1 or 2, positive quantity, price in
+    `(0, d - 0.01]`, and — for a sell — that the seller actually holds the shares. That last
+    one isn't in CLAUDE.md's exception list but protects a real invariant: without it a naked
+    sell would create shares from nothing and break "outstanding shares == pairs ever
+    allocated or minted". All of them reuse `IllegalTradeException`; no new exception types.
+  - The price-ceiling comparison carries a `1e-9` epsilon so that an order at *exactly* the
+    ceiling isn't rejected by floating-point representation noise alone (`d - 0.01` is computed
+    in binary; with `d = 1` a literal `0.99` must still be accepted — covered by a test).
+  - Covered by `engine/test/engine/impl/trading/OrderBookExecutorTest.java`, which asserts the
+    appendix's Section 4 walkthrough fill-by-fill (20 @ `$0.50`, then 10 @ `$0.48`, Carol's 5
+    left resting, Zoe's `$14.80`) plus book independence, time priority on equal prices,
+    partial fills, non-crossing orders, both commission modes, and every rejection path.
 
 ### `engine.impl.state` package
 
@@ -816,6 +977,27 @@ the intentionally top-level, `ui`-facing packages.
 - **What it connects to:** Will be `IEngine.listEvents(EventFilterDto)`'s parameter (currently
   a stub) — the original zero-arg `listEvents()` stays as an unmodified overload since
   `ui.Main` still calls it.
+
+#### `OrderResultDto` (`engine/src/dto/OrderResultDto.java`) — Order Book core stage, new
+- **What it is:** The receipt for one submitted order-book order: which option and side, how
+  much filled versus how much is now resting, the total value, the submitter's commission and
+  net outlay/proceeds, the average fill price, a per-fill breakdown, and the event's resulting
+  `EventStatusDto` nested inside.
+- **Why it exists:** The Order Book analogue of `TradeConfirmationDto`, following that same
+  "purpose-built receipt with the event's status nested" pattern rather than returning bare
+  status — `submitOrder` is a trade, so it gets a trade's receipt shape. It needs *more* than
+  the LMSR version because **one order can fill across several resting orders at different
+  prices**, so there is no single meaningful price the way LMSR has: hence `fills` (reusing
+  the existing `TradeRecordDto` row shape rather than inventing another) and a computed
+  average. The scaffolded `OrderDto` return type it replaces described only a *resting*
+  order, which is exactly what a fully-filled order doesn't have.
+- **What it connects to:** Returned by `IEngine.submitOrder(SubmitOrderRequestDto)`, built by
+  `EngineImpl.toOrderResultDto()` from the `List<Trade>` `OrderBookExecutor` produces.
+  `averageFillPrice` is a boxed `Double`, **null when nothing filled** — following
+  `OrderBookSnapshotDto`'s existing nullable-when-unavailable convention, since both `0.0` and
+  `NaN` would be actively misleading there. `commissionPaid` means "commission paid by the
+  submitting user" specifically, and is therefore `0` for a sell under `ON_PURCHASE` —
+  commission follows the buyer of each fill, so a seller's resting counterparties pay it.
 
 ### `exception` package
 
@@ -1139,6 +1321,23 @@ decided explicitly at submission time rather than folded silently into a refacto
   being viewed), then re-selects the same event afterward so the user doesn't lose their
   place. `submitPurchase` now also calls `refreshUsersList()` after every purchase — a
   purchase always changes some user's balance, regardless of which tab triggered it.
+  **Order Book follow-up stage — the action control is now status-driven.** Both detail panels
+  previously built the Buy form unconditionally, so a `NOT_STARTED` or `CLOSED` event showed a
+  Buy button that could only ever fail. One new `buildActionControl(status, …)` now picks the
+  single control that can actually succeed: `NOT_STARTED` → the new **Open Event** form
+  (user picker + button, calling `IEngine.openEvent`); `ACTIVE` → the existing participate
+  form; `CLOSED` → an explanatory label and nothing else. An exhaustive `switch` over
+  `EventStatus` with no `default`, so a future status value fails to compile here rather than
+  silently rendering nothing — the same discipline `ui.Main.formatStatus` already uses.
+  **This is also the first and only caller of `IEngine.openEvent` anywhere in the UI** —
+  before it, nothing could move an event to `ACTIVE`, which meant nothing built in the Order
+  Book core stage could be exercised by hand at all (`submitOrder` requires `ACTIVE`).
+  The Open control reuses the existing `buildUsernameComboBox()` rather than duplicating it,
+  and on success redraws through the caller's own `onSuccess` callback then refreshes both
+  lists, since opening moves money from the MM into the event account. Deliberate asymmetry:
+  the Users tab's per-event sub-panel gets the same gating but **no** Open button — opening
+  was scoped to the Events tab, and an MM opening their event from their own area is a
+  one-line addition if wanted later.
 
 #### `MainView.fxml` (`ui/resources/ui/MainView.fxml` → now `gui/resources/gui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +

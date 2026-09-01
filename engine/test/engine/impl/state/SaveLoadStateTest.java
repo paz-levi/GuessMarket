@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import dto.EventStatus;
+import dto.TradingMethod;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
@@ -147,7 +148,7 @@ class SaveLoadStateTest {
         account.credit(62.01);
         account.addCommissionCollected(31.0);
         Event event = new Event(1, "Election", "Who wins?", optionOne, optionTwo,
-                50, CommissionMode.ON_PURCHASE, 100, account, EventStatus.ACTIVE);
+                50, CommissionMode.ON_PURCHASE, 100, account, EventStatus.ACTIVE, TradingMethod.LMSR, null);
         event.addTrade(new Trade(optionOne, 100, 0.62, 31.0, 93.0, LocalDateTime.of(2026, 1, 1, 10, 0), "Avrum"));
         return event;
     }
@@ -161,7 +162,7 @@ class SaveLoadStateTest {
         account.debit(20.0);
         account.addCommissionCollected(2.0);
         Event event = new Event(2, "Weather", "Will it rain?", optionOne, optionTwo,
-                20, CommissionMode.ON_CLOSE, 50, account, EventStatus.ACTIVE);
+                20, CommissionMode.ON_CLOSE, 50, account, EventStatus.ACTIVE, TradingMethod.LMSR, null);
         event.addTrade(new Trade(optionOne, 10, 0.5, 0.0, 5.0, LocalDateTime.of(2026, 1, 2, 12, 30), "Tikva"));
         event.close(optionOne);
         return event;

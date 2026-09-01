@@ -32,4 +32,9 @@ public final class User implements Serializable {
     public void debit(double amount) {
         balance -= amount;
     }
+
+    // Increases the balance by amount — money coming in, e.g. the proceeds of selling shares on an order book.
+    public void credit(double amount) {
+        balance += amount;
+    }
 }
