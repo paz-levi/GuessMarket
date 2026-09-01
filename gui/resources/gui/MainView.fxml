@@ -15,7 +15,7 @@
 
 <!-- Root layout: shared header (Load File button + current-file label + load progress indicator) over the Events/Users tab structure. Both tabs are list/details splits. -->
 <BorderPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
-            fx:controller="ui.MainViewController">
+            fx:controller="gui.MainViewController">
     <top>
         <HBox fx:id="headerBar" spacing="12" styleClass="header-bar">
             <padding>

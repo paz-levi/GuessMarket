@@ -5,9 +5,12 @@ add entries here, existing entries are not rewritten away. Grouped by module.
 
 ```mermaid
 flowchart TD
-    subgraph UI["ui module"]
-        Main["Main (console UI, active entry point)"]
-        GuessMarketApp["GuessMarketApp (JavaFX, not yet active)"]
+    subgraph UI["ui module (frozen Ex1 console)"]
+        Main["Main (console UI, run-console.bat)"]
+    end
+
+    subgraph GUI["gui module (JavaFX, ships for Ex2)"]
+        GuessMarketApp["GuessMarketApp (active entry point, run.bat)"]
         MainViewController["MainViewController"]
     end
 
@@ -1050,7 +1053,46 @@ the intentionally top-level, `ui`-facing packages.
   throws before this placeholder is ever read, since no event this console can load is ever
   anything but `NOT_STARTED`. No real console user-selection UX was invented for it.
 
-#### `GuessMarketApp` (`ui/src/ui/GuessMarketApp.java`) — Ex2 JavaFX skeleton stage, new
+---
+
+## `gui` module — split out of `ui`, Ex2 module-split stage
+
+**What happened:** the JavaFX application moved out of the `ui` module into its own third
+IntelliJ module, `gui/` (sibling of `engine/` and `ui/`), per the lecturer's explicit
+recommendation (confirmed from his recording, not inferred from the spec). Pure
+reorganization — zero behavior change; all 17 Ex1 tests and the JavaFX launch flow verified
+identical afterward.
+
+**Why a whole module, not a sub-package:** the console `ui` module is a frozen Ex1 reference
+with entirely separate dependencies — after the split its `.iml` and its `build.bat` step shed
+the JavaFX SDK library, the `--module-path`/`--add-modules` flags, and the resource-copy step
+entirely, because `ui.Main` has zero `javafx.*` imports and never actually needed any of them.
+Keeping the two in one module had been forcing the console to carry JavaFX wiring it doesn't use.
+
+**Package renamed `ui` → `gui`** alongside the move: one package spanning two modules is a
+code smell on the classpath and outright illegal under JPMS, which Ex3 may reach.
+`gui`/`gui` also matches the repo's existing dir==package convention (`ui`/`ui`,
+`engine`/`engine`). `GuessMarketApp`'s `getResource("MainView.fxml")`/`getResource("styles.css")`
+calls are **package-relative**, so they followed the move automatically with no path edits —
+a hardcoded `/ui/...` would have broken silently here.
+
+**The four entries below keep their original `ui/...` paths in their headings** (this file is
+append-only). Their current locations are: `gui/src/gui/GuessMarketApp.java`,
+`gui/src/gui/MainViewController.java`, `gui/resources/gui/MainView.fxml`,
+`gui/resources/gui/styles.css`.
+
+**Build/run wiring:** `build.bat` gained a third compile + resource-copy + jar step producing
+`dist/gui.jar` (new `gui-manifest.txt`, `Main-Class: gui.GuessMarketApp`). `run.bat` now
+launches `dist/gui.jar` — the JavaFX app is the actual Ex2 deliverable, and per the lecturer
+it is the only jar that needs to ship. The Ex1 console stays reachable via a new
+`run-console.bat` (no JavaFX flags — it needs none). `ui-manifest.txt` is unchanged and still
+correct for the still-built `ui.jar`.
+
+**Deliberately deferred, not forgotten:** per the lecturer the `ui` module doesn't need to
+ship a JAR at all, making its `build.bat` step a removal candidate — kept for now, to be
+decided explicitly at submission time rather than folded silently into a refactor.
+
+#### `GuessMarketApp` (`ui/src/ui/GuessMarketApp.java` → now `gui/src/gui/GuessMarketApp.java`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A `javafx.application.Application` subclass — the project's first JavaFX
   entry point. `main()` calls the inherited `launch(args)`; `start(Stage)` loads
   `MainView.fxml` via an `FXMLLoader` instance (`setLocation()` + `load()`, not the static
@@ -1072,7 +1114,7 @@ the intentionally top-level, `ui`-facing packages.
   reachable via a direct `java ... ui.GuessMarketApp` invocation for manual verification, until
   a later step retires `ui.Main` and flips the manifest over.
 
-#### `MainViewController` (`ui/src/ui/MainViewController.java`) — Ex2 JavaFX skeleton stage, new
+#### `MainViewController` (`ui/src/ui/MainViewController.java` → now `gui/src/gui/MainViewController.java`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** `MainView.fxml`'s controller class (`fx:controller="ui.MainViewController"`),
   currently holding only `@FXML`-injected references to the header's `Button`
   (`loadFileButton`) and `Label` (`filePathLabel`) — no event handlers, no `initialize()`
@@ -1098,7 +1140,7 @@ the intentionally top-level, `ui`-facing packages.
   place. `submitPurchase` now also calls `refreshUsersList()` after every purchase — a
   purchase always changes some user's balance, regardless of which tab triggered it.
 
-#### `MainView.fxml` (`ui/resources/ui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
+#### `MainView.fxml` (`ui/resources/ui/MainView.fxml` → now `gui/resources/gui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +
   "No file loaded" label) on top, and a `TabPane` with two non-closable, currently-empty tabs
   ("Events", "Users") in the center — the shared-header-over-tabs structure described in
@@ -1109,7 +1151,7 @@ the intentionally top-level, `ui`-facing packages.
 - **What it connects to:** Loaded by `GuessMarketApp.start()`; its `fx:controller` binds it to
   `MainViewController`. Not yet reachable from `IEngine` in any way.
 
-#### `styles.css` (`ui/resources/ui/styles.css`) — Ex2 JavaFX skeleton stage, new
+#### `styles.css` (`ui/resources/ui/styles.css` → now `gui/resources/gui/styles.css`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A minimal hand-written CSS file (plain JavaFX `-fx-*` syntax) — a base font
   size and a bottom border on the header bar. No real color scheme yet.
 - **Why it exists:** Proves `scene.getStylesheets().add(...)` is wired correctly before any

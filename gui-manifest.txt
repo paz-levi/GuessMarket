@@ -1,0 +1,2 @@
+Main-Class: gui.GuessMarketApp
+Class-Path: engine.jar

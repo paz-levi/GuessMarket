@@ -10,7 +10,8 @@ This file is a curated summary of spec v3's Exercise 2 section (+ Appendix B —
   lecturer-provided `GM-EX2-Schema_xsd.xml` **and against this repo's own `ARCHITECTURE.md`**,
   which documents exactly what Exercise 1 actually built (not just what was planned). Before
   guessing at any ambiguous behavior, check these scoped reference files:
-- `ARCHITECTURE.md` (repo root) — the real, current class-by-class map of `engine` and `ui`.
+- `ARCHITECTURE.md` (repo root) — the real, current class-by-class map of `engine`, `ui`,
+  and `gui`.
   **Read this before writing any new code** — it is more reliable than this file's own
   memory of what Ex1 built, since it's updated every stage.
 - ` docs-reference/exercise1-requirements.md` — still fully valid; Ex1 rules carry forward
@@ -38,9 +39,15 @@ gets extended.** Every LMSR method Ex1 defined keeps working exactly as before; 
 capability (Users, Order Book) alongside it, because Ex3's HTTP layer will sit behind this
 same interface next.
 
-- `ui` gets rebuilt from scratch (console loop → JavaFX `Application`) — but `engine`'s
-  existing Ex1 logic (XML load, LMSR math, exceptions, and the Save/Load-State bonus) is
-  **reused, not reimplemented.**
+- **Module structure, as of the Phase 1 refactor:** `engine` (unchanged in role), `ui`
+  (the frozen Ex1 console — kept only as a working dev-time reference, never packaged for
+  submission per the lecturer), and `gui` (new — the actual JavaFX application, and the
+  only module whose JAR ships). Earlier drafts of this file said "`ui` gets rebuilt into a
+  JavaFX `Application`" — that's no longer accurate; `ui` stays frozen, `gui` is new. Any
+  reference below to "`ui`" in a JavaFX/screen/`Task` context means `gui`; `ui` alone still
+  means the frozen console.
+- `engine`'s existing Ex1 logic (XML load, LMSR math, exceptions, and the Save/Load-State
+  bonus) is **reused, not reimplemented.**
 - Do not touch or "clean up" working Ex1 engine code as a side effect of adding Ex2 features
   unless a rule below explicitly requires a change.
 - **Ex1 shipped a bonus feature already in place: save/load full engine state**
@@ -53,7 +60,8 @@ same interface next.
 ## 1. Tech Stack & Environment
 
 - **Language:** Java 25, strictly — unchanged from Ex1.
-- **Build system:** IntelliJ multi-module project (`engine`, `ui`) — unchanged from Ex1.
+- **Build system:** IntelliJ multi-module project — `engine`, `ui` (frozen console), `gui`
+  (JavaFX) as of the Phase 1 refactor.
   **Ex1 shipped with zero third-party dependencies** — confirmed from `ARCHITECTURE.md`:
   `EventsFileLoader` deliberately uses plain JDK DOM parsing (`javax.xml.parsers`), **not
   JAXB**, specifically to avoid third-party JAR-packaging risk on a plain multi-module
@@ -61,13 +69,22 @@ same interface next.
   JAXB was in use — corrected here. See Section 8.) **Default to the same zero-dependency
   approach for Ex2** unless something is explicitly confirmed with the lecturer/forum — this
   is the same instinct already proven out once, not a new restriction invented for Ex2.
-- **Packaging:** Ex1 required exactly one independent JAR per module (`engine`, `ui`), no fat
-  JAR. Ex2's submission wording is looser — "**jar (one or more)**" — don't assume either
-  Ex1's stricter rule or the loosest possible reading; this is an open item (Section 8).
-- **Runtime environment:** cmd on Windows 10, no IDE present. Ship runnable JAR(s) + a `.bat`
-  file — unchanged from Ex1.
-- **JavaFX:** on top of the same Java version constraint. *(Version not pinned in the spec
-  text — use whatever was demoed in class; confirm on the forum if genuinely unclear.)*
+- **Packaging — confirmed by the lecturer directly (recording), no longer an open item:**
+  submit **only the JavaFX module's JAR.** No JAR is needed or wanted for the old Ex1
+  console module — it doesn't ship, and doesn't need to run correctly against Ex2 files or
+  stay backward-compatible at all. Matches the module-split decision below: `engine`,
+  `ui` (frozen Ex1 console, dev-only reference, never packaged for submission), and a third
+  new module for the JavaFX app (the one and only thing that gets zipped).
+- **Runtime environment:** cmd on Windows 10, no IDE present. Ship the JavaFX module's
+  runnable JAR + a `.bat` file — unchanged from Ex1 in spirit, narrowed in scope per above.
+- **JavaFX:** version 25.0.4 (Oracle SDK, Windows x64) — chosen to match the project's own
+  Java 25 requirement 1:1, since no exact version was pinned by the lecturer even directly
+  (recording confirms: separate setup guides/videos to follow — watch for those, revisit
+  this choice only if they say otherwise).
+- **Module structure — confirmed by the lecturer directly (recording):** stay in the same
+  IntelliJ project from Ex1, add a **third module** dedicated to the JavaFX app, alongside
+  `engine` and the frozen Ex1 `ui` (console) module — not inside `ui`. (Refactor in
+  progress — see Section 8.)
 - **File loading — hard rule (new):** only via a `FileChooser` dialog. Never assume a fixed
   directory, never accept a typed path in a text field. Loading runs inside a JavaFX `Task`
   with a visible progress indicator; add a short artificial delay (~1-2s), since the real
@@ -77,7 +94,7 @@ same interface next.
   workaround.** Use `ScrollPane` for panels whose content may not fit a smaller window.
 - **English-only I/O, 2-decimal money formatting** — unchanged from Ex1. `ui.Main` already
   pins `Locale.US` explicitly for `%.2f` formatting so it can't silently drift on a
-  non-English-default JVM — carry that same discipline into the JavaFX `ui`.
+  non-English-default JVM — carry that same discipline into `gui`.
 - **Case-insensitive text input** — was about free-text console commands; there's no
   free-text command entry in a GUI, but keep it in mind for any text-based filter/search box.
 - **No-color / no-screen-clear / 1-based indexing** — console-specific Ex1 rules, **retired**
@@ -94,24 +111,25 @@ same interface next.
 ## 2. Architecture & Module Separation
 
 - **`engine` stays 100% passive.** Hard rule: **zero `javafx.*` imports anywhere in
-  `engine`.** JavaFX `Property`/`Observable` binding happens only inside `ui`, wrapping DTOs
-  the engine already returns — see Section 8. **`Task` belongs to `ui`, not `engine`, for
+  `engine`.** JavaFX `Property`/`Observable` binding happens only inside `gui`, wrapping DTOs
+  the engine already returns — see Section 8. **`Task` belongs to `gui`, not `engine`, for
   the same reason — lecturer-confirmed, not just inferred:** a `Task` is inherently
   "JavaFX-colored" (its `messageProperty`/`progressProperty`, the choice between updating
   properties directly vs. `Platform.runLater`) and would tie `engine` to JavaFX for no real
-  benefit if it lived there instead — think of it as `ui` calling out to `engine` from a
+  benefit if it lived there instead — think of it as `gui` calling out to `engine` from a
   background thread, not `engine` owning the threading concern itself. `engine` methods
-  stay ordinary synchronous calls; `ui` is the one that decides to run them off the JavaFX
+  stay ordinary synchronous calls; `gui` is the one that decides to run them off the JavaFX
   Application Thread.
-- **`ui` becomes a JavaFX `Application`.** FXML + Controller vs. building scenes in code is
-  not mandated by the spec — pick one and stay consistent.
+- **`gui` is the JavaFX `Application`** (module split from `ui` — see Section 0). FXML +
+  Controller vs. building scenes in code is not mandated by the spec — pick one and stay
+  consistent.
 
 ### Existing structure — confirmed from `ARCHITECTURE.md`, read it before adding anything
 
 - `engine.IEngine` — the interface, plus a **static factory method `createDefault()`** that
-  `ui` calls to get a working engine instance without ever importing `engine.impl.EngineImpl`
+  `gui` calls to get a working engine instance without ever importing `engine.impl.EngineImpl`
   by name. **Reuse this exact pattern** for any new engine-obtaining code path in the JavaFX
-  `ui` — don't invent a different construction/DI mechanism for Ex2.
+  `gui` — don't invent a different construction/DI mechanism for Ex2.
 - `engine.impl.EngineImpl` — the one concrete `IEngine` implementation.
 - `engine.domain` — `Event`, `EventOption`, `Trade`, `MarketMakerAccount`,
   `CommissionMode` (**domain-level** — note there's already a separate **dto-level**
@@ -302,8 +320,8 @@ file got these wrong by extending a generic Ex1 template instead of the actual r
 **Architecture decision — engine stays passive, no JavaFX `Property` fields in `engine`:**
 confirmed against the lecturer's own reasoning — `Property` fields + listeners on engine
 members would make the engine "active," pushing updates outward, which breaks the pull-based
-contract Ex3's client-server split needs. `ui` wraps engine DTOs into local JavaFX properties
-for binding, purely inside `ui`; `engine` never imports `javafx.*`.
+contract Ex3's client-server split needs. `gui` wraps engine DTOs into local JavaFX properties
+for binding, purely inside `gui`; `engine` never imports `javafx.*`.
 
 **Styling decision — reconsidered:** AtlantaFX was proposed, then walked back — no explicit
 spec permission found for third-party JavaFX libraries (see Section 1). This also now lines
@@ -311,9 +329,25 @@ up with how Ex1's own `EventsFileLoader` already chose plain DOM over JAXB for t
 reason. Default is a hand-written CSS file; revisit only after explicit confirmation.
 
 **Open items to confirm / flag in the README rather than silently assume:**
-1. Negative-balance mechanics for Order Book (Section 4).
-2. Whether leftover Order Book event-account funds return to the MM at close, same as LMSR.
-3. Packaging — whether Ex1's strict "2 separate JARs, no fat jar" rule still binds, given the
-   looser Ex2 submission wording.
-4. JavaFX version — not pinned anywhere in the spec text.
-5. Third-party JavaFX libraries — no explicit rule found either way; default to zero.
+1. Negative-balance mechanics for Order Book (Section 4) — lecturer's recording doesn't add
+   detail beyond confirming every user has an account/initial balance; stays our own
+   documented interpretation (transaction completes, block applies after).
+2. Whether leftover Order Book event-account funds return to the MM at close, same as LMSR
+   — lecturer's recording defers to the written spec/simulation, neither of which actually
+   covers this either (double-checked directly in the docx, not just assumed). Genuinely
+   unresolved — worth a direct forum question.
+3. **What happens to resting/unmatched Order Book orders when their event closes** — NEW,
+   found while re-verifying NotebookLM's claim that this is "in the written spec": it is
+   **not** — checked the docx directly (every "ממתינות/resting" mention is already captured
+   in `order-book-appendix.md`, none address close-time behavior). Genuinely unresolved,
+   not just uninvestigated — worth a direct forum question, same category as item 2.
+4. ~~Packaging~~ — **resolved**, see Section 1: only the JavaFX module's JAR ships.
+5. ~~JavaFX version~~ — **resolved in practice**: 25.0.4 in use; lecturer's recording says
+   separate setup guides are coming, revisit only if those say otherwise.
+6. Third-party JavaFX libraries (e.g. AtlantaFX) — lecturer's recording doesn't mention any
+   by name or require approval, and explicitly says grading is functionality-only with
+   freedom of choice on components/tools. This *weakens* the earlier caution, but doesn't
+   fully resolve it either ("freedom of choice" is generic, may just mean widget choice, not
+   necessarily "any Maven dependency"). Since the self-written CSS baseline already works
+   and grading doesn't reward polish either way, there's no real upside to revisiting this
+   now — staying with zero dependencies remains the lower-risk default.
