@@ -6,6 +6,70 @@ scannable in seconds.
 
 ---
 
+### `f155a15` — 2026-09-01 — docs: sync CLAUDE.md ui/gui terminology after module split; add lecture transcript notes
+**Combined commit — its message describes only the docs half; the larger half is a module
+refactor.** Recorded here in full so `git log` alone doesn't undersell it.
+
+*Module refactor:* the JavaFX app moved out of `ui` into its own new third module `gui/`
+(package `ui` → `gui`), per the lecturer's recording — `GuessMarketApp`,
+`MainViewController`, `MainView.fxml`, `styles.css`, all four recorded by git as **renames**,
+so history is preserved. `ui` reverts to the frozen Ex1 console and *sheds* what it never
+needed: its `.iml` drops the JavaFX SDK library and resources folder, and its `build.bat` step
+drops `--module-path`/`--add-modules` and the whole `xcopy` step (`ui.Main` has zero
+`javafx.*` imports, verified). New `gui/gui.iml`, `gui-manifest.txt`
+(`Main-Class: gui.GuessMarketApp`), and a third build step producing `dist/gui.jar`;
+`ui-manifest.txt` unchanged. `GuessMarketApp`'s `getResource` calls are package-relative so
+they followed the move with no path edits — confirmed via `jar tf`, not assumed.
+**One user-visible behavior change** in an otherwise pure reorganization: `run.bat` now
+launches `dist/gui.jar` instead of the console, with a new `run-console.bat` for the Ex1
+console. That switch was initially folded into the plan rather than raised as its own
+decision as instructed, then re-surfaced explicitly after the fact and confirmed — noted
+because the process, not just the outcome, is worth remembering. Verified: 3 jars build,
+17/17 tests pass, and `run.bat` launches the GUI *from the jar* (`java -jar` +
+`--module-path` + manifest `Class-Path` — a combination the project had never exercised, so
+it was actually run, not assumed).
+
+*Docs half:* `CLAUDE.md` swept `ui` → `gui` throughout every JavaFX/`Task`/screen context
+(the old "`ui` gets rebuilt into a JavaFX Application" framing is now wrong and says so
+explicitly), and — more than terminology — **resolved two long-standing open items from
+Section 8**: packaging (submit *only* the JavaFX module's JAR; the console module ships
+nothing and needs no Ex2 or backward compatibility) and JavaFX version (25.0.4, matched to
+Java 25). It also **opened a new one**: what happens to resting/unmatched Order Book orders
+when their event closes — found while re-verifying a NotebookLM claim that this was covered
+in the written spec; checking the docx directly showed it isn't. Directly relevant to Order
+Book's still-unimplemented `closeEvent` path. New ` docs-reference/lecture-transcript-notes.md`
+distills the recording (module structure, functionality-only grading, build order, and an
+explicit list of what it does *not* settle). `ARCHITECTURE.md` gained a `## gui module`
+section, a split UI/GUI diagram, and new-path annotations on the four moved-file headings
+(append-only convention respected — original headings kept, not rewritten).
+
+### `003c683` — 2026-09-01 — Wire username into participateInEvent: attribute trades, debit buyer, block negative-balance users; shared participate form on both tabs
+The last deliberately-deferred gap from earlier stages, closed end to end. `Trade` gained a
+`buyerUsername` field (null-safe for pre-existing `.gmstate` files, same pattern as
+`User`/`EngineStateSnapshot`); `TradeExecutor.participate()` now takes the resolved buyer and
+debits them the *same* `totalPaid` value already credited to the `MarketMakerAccount` — not
+recomputed, so the two sides can never drift (verified directly against source and by hand
+arithmetic against real output, not just asserted). `IEngine`/`EngineImpl.participateInEvent`
+gained `username`, checking `UserNotFoundException`/`UserBlockedException` before any
+mutation — `UserBlockedException`'s first real use anywhere in the codebase. Per CLAUDE.md
+Section 4, no affordability pre-check: a purchase can legitimately leave the buyer negative;
+`User.isBlocked()` picks that up automatically from that point on, blocking further actions.
+`EngineImpl.toUserDetailDto()` builds `activeParticipations` for real now (was hardcoded
+empty) — trade history, per-option shares/amount paid, total commission, and winner-if-closed
+per event, including `CLOSED` events per `exercise2-requirements.md`'s own description;
+`profitOrLoss` stays `null` for LMSR as already documented at the skeleton stage. UI: the
+Events tab's existing standalone Buy form and the Users tab's (previously read-only) sub-panel
+are now one shared `buildParticipateForm` component — a username `ComboBox` on the Events tab,
+pre-bound to the already-selected user on the Users tab, with an `onSuccess` callback letting
+each tab redraw itself its own way (the Users tab does a full re-fetch/rebuild of all three
+sections, since a purchase changes the balance badge and that event's participation entry, not
+only the sub-panel in view — re-selecting the same event afterward so the user doesn't lose
+their place). `ui.Main`'s Command 4 gets a `CONSOLE_PLACEHOLDER_USERNAME` constant purely to
+keep compiling — confirmed genuinely dead code, since any event the console can load is
+permanently `NOT_STARTED`. All 17 tests updated (not just left passing) with real assertions
+for the new debit/attribution behavior; verified further via a throwaway harness covering the
+full flow plus both new exceptions.
+
 ### `b1d3633` — 2026-08-31 — Wire Users tab per sketch: users list, balance badge, participation list, event details (read-only); align both tabs' SplitPane dividers to 0.48
 Users tab now matches the sketch layout precisely: a `SplitPane` (users list left, three
 stacked sections right — a top-right "Account Balance" badge via a right-aligned `HBox` +
