@@ -120,6 +120,7 @@ class SaveLoadStateTest {
         assertEquals(expected.getCommissionPaid(), actual.getCommissionPaid(), DELTA);
         assertEquals(expected.getTotalPaid(), actual.getTotalPaid(), DELTA);
         assertEquals(expected.getTimestamp(), actual.getTimestamp());
+        assertEquals(expected.getBuyerUsername(), actual.getBuyerUsername());
     }
 
     // Builds a two-user fixture: one with a positive balance, one already blocked (negative balance) -- exercises isBlocked() round-tripping too.
@@ -147,7 +148,7 @@ class SaveLoadStateTest {
         account.addCommissionCollected(31.0);
         Event event = new Event(1, "Election", "Who wins?", optionOne, optionTwo,
                 50, CommissionMode.ON_PURCHASE, 100, account, EventStatus.ACTIVE);
-        event.addTrade(new Trade(optionOne, 100, 0.62, 31.0, 93.0, LocalDateTime.of(2026, 1, 1, 10, 0)));
+        event.addTrade(new Trade(optionOne, 100, 0.62, 31.0, 93.0, LocalDateTime.of(2026, 1, 1, 10, 0), "Avrum"));
         return event;
     }
 
@@ -161,7 +162,7 @@ class SaveLoadStateTest {
         account.addCommissionCollected(2.0);
         Event event = new Event(2, "Weather", "Will it rain?", optionOne, optionTwo,
                 20, CommissionMode.ON_CLOSE, 50, account, EventStatus.ACTIVE);
-        event.addTrade(new Trade(optionOne, 10, 0.5, 0.0, 5.0, LocalDateTime.of(2026, 1, 2, 12, 30)));
+        event.addTrade(new Trade(optionOne, 10, 0.5, 0.0, 5.0, LocalDateTime.of(2026, 1, 2, 12, 30), "Tikva"));
         event.close(optionOne);
         return event;
     }

@@ -3,10 +3,13 @@ package ui;
 import java.io.File;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
@@ -165,15 +168,28 @@ public class MainViewController {
     private void showUserDetails(String username) {
         try {
             UserDetailDto detail = engine.getUser(username);
-            renderUserDetails(detail);
+            renderUserDetails(detail, null);
+        } catch (GuessMarketException e) {
+            showErrorAlert("Could not load user details", e);
+        }
+    }
+
+    // Re-fetches username's full detail view after a purchase made from their own tab, then rebuilds all three sections
+    // fresh (the balance badge and that event's participation entry both changed, not just the sub-panel being viewed),
+    // re-selecting eventIdToReselect afterward so the user doesn't lose their place.
+    private void refreshUserDetailsAfterPurchase(String username, int eventIdToReselect) {
+        try {
+            UserDetailDto detail = engine.getUser(username);
+            renderUserDetails(detail, eventIdToReselect);
         } catch (GuessMarketException e) {
             showErrorAlert("Could not load user details", e);
         }
     }
 
     // Rebuilds the Users tab's details panel from scratch: the account-balance badge, the events-participation list, and a
-    // read-only per-event sub-panel driven by whichever participation gets selected. No trade/buy actions from here yet.
-    private void renderUserDetails(UserDetailDto detail) {
+    // per-event sub-panel (details + participate form) driven by whichever participation gets selected. If
+    // eventIdToReselect is non-null, that participation is re-selected programmatically after rebuilding the list.
+    private void renderUserDetails(UserDetailDto detail, Integer eventIdToReselect) {
         Label balanceLabel = new Label("Balance: " + formatMoney(detail.balance()) + (detail.blocked() ? "  (BLOCKED)" : ""));
         balanceLabel.getStyleClass().add("balance-badge");
         HBox balanceBadge = new HBox(balanceLabel);
@@ -193,7 +209,7 @@ public class MainViewController {
         });
         participationListView.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> {
             if (newSelection != null) {
-                showUserEventDetails(newSelection.eventId(), singleEventDetailsBox);
+                showUserEventDetails(newSelection.eventId(), singleEventDetailsBox, detail.username());
             }
         });
 
@@ -205,15 +221,27 @@ public class MainViewController {
                 new Label("Single event details and trade:"),
                 singleEventDetailsBox
         );
+
+        if (eventIdToReselect != null) {
+            for (UserEventParticipationDto participation : participationListView.getItems()) {
+                if (participation.eventId() == eventIdToReselect) {
+                    participationListView.getSelectionModel().select(participation);
+                    break;
+                }
+            }
+        }
     }
 
-    // Looks up one event's full status and renders it read-only (no participate form) in the given container; called
-    // whenever the Users tab's events-participation list selection changes.
-    private void showUserEventDetails(int eventId, VBox container) {
+    // Looks up one event's full status and renders it (details + participate form, pre-bound to username) in the given
+    // container; called whenever the Users tab's events-participation list selection changes.
+    private void showUserEventDetails(int eventId, VBox container, String username) {
         try {
             EventStatusDto status = engine.getEventStatus(eventId);
             container.getChildren().clear();
             appendEventStatusDisplay(container, status);
+            container.getChildren().add(new Separator());
+            container.getChildren().add(buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
+                    username, newStatus -> refreshUserDetailsAfterPurchase(username, eventId)));
         } catch (GuessMarketException e) {
             showErrorAlert("Could not load event details", e);
         }
@@ -234,7 +262,8 @@ public class MainViewController {
         eventDetailsBox.getChildren().clear();
         appendEventStatusDisplay(eventDetailsBox, status);
         eventDetailsBox.getChildren().add(new Separator());
-        eventDetailsBox.getChildren().add(buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName()));
+        eventDetailsBox.getChildren().add(buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
+                null, this::renderEventDetails));
     }
 
     // Appends the read-only event status display (prices/shares, account state, winner-if-closed, trade history) to the
@@ -274,8 +303,23 @@ public class MainViewController {
         return section;
     }
 
-    // Builds the LMSR participate form: an option selector (by name, not free text), a share-quantity text field, and a Buy button.
-    private VBox buildParticipateForm(int eventId, String optionOneName, String optionTwoName) {
+    // Builds the LMSR participate form: a username source (a fixed Label if fixedUsername is given -- the Users tab,
+    // already viewing that user's own area -- otherwise a ComboBox populated from listUsers(), for the Events tab's
+    // standalone use), an option selector (by name, not free text), a share-quantity text field, and a Buy button.
+    // onSuccess lets each call site redraw itself its own way after a successful purchase.
+    private VBox buildParticipateForm(int eventId, String optionOneName, String optionTwoName,
+                                       String fixedUsername, Consumer<EventStatusDto> onSuccess) {
+        Node usernameNode;
+        Supplier<String> usernameSupplier;
+        if (fixedUsername != null) {
+            usernameNode = new Label("Buying as: " + fixedUsername);
+            usernameSupplier = () -> fixedUsername;
+        } else {
+            ComboBox<String> usernameComboBox = buildUsernameComboBox();
+            usernameNode = usernameComboBox;
+            usernameSupplier = () -> usernameComboBox.getSelectionModel().getSelectedItem();
+        }
+
         ComboBox<String> optionComboBox = new ComboBox<>();
         optionComboBox.getItems().addAll(optionOneName, optionTwoName);
         optionComboBox.getSelectionModel().selectFirst();
@@ -287,15 +331,37 @@ public class MainViewController {
         quantityField.setPrefColumnCount(6);
 
         Button buyButton = new Button("Buy");
-        buyButton.setOnAction(event -> handleBuyClick(eventId, optionComboBox, quantityField));
+        buyButton.setOnAction(event -> handleBuyClick(eventId, usernameSupplier, optionComboBox, quantityField, onSuccess));
 
         return new VBox(6, new Label("Participate:"),
-                new HBox(8, optionComboBox, quantityField, buyButton));
+                new HBox(8, usernameNode, optionComboBox, quantityField, buyButton));
+    }
+
+    // Builds a username picker populated from the currently loaded users, for the Events tab's standalone participate
+    // form (which has no already-selected user to bind to, unlike the Users tab's).
+    private ComboBox<String> buildUsernameComboBox() {
+        ComboBox<String> comboBox = new ComboBox<>();
+        try {
+            for (UserSummaryDto user : engine.listUsers()) {
+                comboBox.getItems().add(user.username());
+            }
+            comboBox.getSelectionModel().selectFirst();
+        } catch (GuessMarketException e) {
+            // A file is definitely loaded here (we're already showing event details), so this shouldn't happen in
+            // practice -- leave the combo box empty rather than block the rest of the form from rendering.
+        }
+        return comboBox;
     }
 
     // Reads the quantity field's text exactly as typed; a genuine parse failure is the only ui-level check — everything
-    // else (negative/zero/too-large) goes straight to the engine for IllegalTradeException to reject.
-    private void handleBuyClick(int eventId, ComboBox<String> optionComboBox, TextField quantityField) {
+    // else (negative/zero/too-large, an unselected/blocked/unknown user) goes straight to the engine to reject.
+    private void handleBuyClick(int eventId, Supplier<String> usernameSupplier, ComboBox<String> optionComboBox,
+                                 TextField quantityField, Consumer<EventStatusDto> onSuccess) {
+        String username = usernameSupplier.get();
+        if (username == null || username.isBlank()) {
+            showErrorAlert("Invalid input", "Select a user to buy as.");
+            return;
+        }
         int optionNumber = optionComboBox.getSelectionModel().getSelectedIndex() + 1;
         int shareQuantity;
         try {
@@ -304,16 +370,18 @@ public class MainViewController {
             showErrorAlert("Invalid input", "Share quantity must be a whole number.");
             return;
         }
-        submitPurchase(eventId, optionNumber, shareQuantity);
+        submitPurchase(eventId, username, optionNumber, shareQuantity, onSuccess);
     }
 
-    // Buys shares via the existing (untouched) IEngine.participateInEvent, then refreshes both the details panel and the events list.
-    private void submitPurchase(int eventId, int optionNumber, int shareQuantity) {
+    // Buys shares via the existing IEngine.participateInEvent, then lets the caller redraw itself (onSuccess) and
+    // refreshes both lists — a purchase always changes some user's balance, regardless of which tab triggered it.
+    private void submitPurchase(int eventId, String username, int optionNumber, int shareQuantity, Consumer<EventStatusDto> onSuccess) {
         try {
-            TradeConfirmationDto confirmation = engine.participateInEvent(eventId, optionNumber, shareQuantity);
+            TradeConfirmationDto confirmation = engine.participateInEvent(eventId, username, optionNumber, shareQuantity);
             showTradeConfirmation(confirmation);
-            renderEventDetails(confirmation.eventStatus());
+            onSuccess.accept(confirmation.eventStatus());
             refreshEventsList();
+            refreshUsersList();
         } catch (GuessMarketException e) {
             showErrorAlert("Could not complete purchase", e);
         }

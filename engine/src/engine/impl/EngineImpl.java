@@ -1,6 +1,7 @@
 package engine.impl;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,7 @@ import dto.TradeConfirmationDto;
 import dto.TradeRecordDto;
 import dto.TradingMethod;
 import dto.UserDetailDto;
+import dto.UserEventParticipationDto;
 import dto.UserSummaryDto;
 import engine.IEngine;
 import engine.domain.CommissionMode;
@@ -93,12 +95,21 @@ public class EngineImpl implements IEngine {
         return toStatusDto(findEvent(eventId));
     }
 
-    // Buys shareQuantity shares of one option, then returns a confirmation carrying the trade's cost breakdown and the event's new status.
+    // Buys shareQuantity shares of one option on username's behalf, then returns a confirmation carrying the trade's cost breakdown and the event's new status.
     @Override
-    public TradeConfirmationDto participateInEvent(int eventId, int optionNumber, int shareQuantity)
-            throws InvalidCommandStateException, EventNotFoundException, IllegalTradeException {
+    public TradeConfirmationDto participateInEvent(int eventId, String username, int optionNumber, int shareQuantity)
+            throws InvalidCommandStateException, EventNotFoundException, IllegalTradeException,
+            UserNotFoundException, UserBlockedException {
         Event event = findActiveEvent(eventId);
-        Trade trade = TradeExecutor.participate(event, optionNumber, shareQuantity);
+        User buyer = users.get(username);
+        if (buyer == null) {
+            throw new UserNotFoundException("No user named \"" + username + "\" is currently loaded.");
+        }
+        if (buyer.isBlocked()) {
+            throw new UserBlockedException("User \"" + username
+                    + "\" is blocked (balance below zero) and cannot perform this action.");
+        }
+        Trade trade = TradeExecutor.participate(event, buyer, optionNumber, shareQuantity);
         return toTradeConfirmationDto(event, trade);
     }
 
@@ -223,13 +234,54 @@ public class EngineImpl implements IEngine {
         if (user == null) {
             throw new UserNotFoundException("No user named \"" + username + "\" is currently loaded.");
         }
-        return toUserDetailDto(user);
+        return toUserDetailDto(user, events.values());
     }
 
-    // Builds the full "user detail" DTO from a domain User. activeParticipations is empty for now: there is no way to
-    // attribute a trade to a specific user yet, since participateInEvent still has no username parameter.
-    private static UserDetailDto toUserDetailDto(User user) {
-        return new UserDetailDto(user.getName(), user.getBalance(), user.isBlocked(), List.of());
+    // Builds the full "user detail" DTO from a domain User: balance, blocked state, and one participation entry per
+    // currently-loaded event the user has at least one trade attributed to (not filtered to ACTIVE -- a CLOSED event the
+    // user participated in still belongs here, per exercise2-requirements.md's own worked description of a closed entry).
+    private static UserDetailDto toUserDetailDto(User user, Collection<Event> allEvents) {
+        List<UserEventParticipationDto> participations = new ArrayList<>();
+        for (Event event : allEvents) {
+            boolean participated = event.getTradeHistory().stream()
+                    .anyMatch(trade -> user.getName().equals(trade.getBuyerUsername()));
+            if (participated) {
+                participations.add(toParticipationDto(event, user.getName()));
+            }
+        }
+        return new UserDetailDto(user.getName(), user.getBalance(), user.isBlocked(), participations);
+    }
+
+    // Builds one event's participation entry for username: their own trade history (newest-first), per-option shares
+    // held/amount paid (summed from their own trades only -- LMSR shares aren't transferable, so "held" is "bought"),
+    // total commission paid, and the winning option if closed. profitOrLoss stays null -- reserved for Order Book.
+    private static UserEventParticipationDto toParticipationDto(Event event, String username) {
+        List<Trade> allTrades = event.getTradeHistory();
+        List<TradeRecordDto> userTradeHistory = new ArrayList<>();
+        double optionOneShares = 0;
+        double optionTwoShares = 0;
+        double optionOneAmountPaid = 0;
+        double optionTwoAmountPaid = 0;
+        double totalCommissionPaid = 0;
+        for (int i = allTrades.size() - 1; i >= 0; i--) {
+            Trade trade = allTrades.get(i);
+            if (!username.equals(trade.getBuyerUsername())) {
+                continue;
+            }
+            userTradeHistory.add(toTradeRecordDto(trade));
+            if (trade.getOption() == event.getOptionOne()) {
+                optionOneShares += trade.getQuantity();
+                optionOneAmountPaid += trade.getTotalPaid();
+            } else {
+                optionTwoShares += trade.getQuantity();
+                optionTwoAmountPaid += trade.getTotalPaid();
+            }
+            totalCommissionPaid += trade.getCommissionPaid();
+        }
+        EventOption winningOption = event.getWinningOption();
+        return new UserEventParticipationDto(event.getId(), event.getName(), TradingMethod.LMSR, event.getStatus(),
+                userTradeHistory, optionOneShares, optionTwoShares, optionOneAmountPaid, optionTwoAmountPaid,
+                totalCommissionPaid, winningOption != null ? winningOption.getName() : null, null);
     }
 
     // Opens a NOT_STARTED event for trading: only its assigned MM may open it, and only if they can afford the LMSR subsidy.

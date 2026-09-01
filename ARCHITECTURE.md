@@ -140,6 +140,11 @@ flowchart TD
   `EventStatusDto` — the skeleton-stage guess turns out unnecessary once actually
   implementing it, since `EngineImpl` already has `toStatusDto()` to reuse (same accepted
   pattern as `participateInEvent`'s third-parameter type fix). No other signature changed.
+  **participateInEvent-username stage:** `participateInEvent` finally gains its `username`
+  parameter (positioned after `eventId`, matching `openEvent`'s established convention),
+  closing the last deliberately-deferred gap noted above — `closeEvent` still lacks one (out
+  of this stage's scope). Also gains `UserNotFoundException`/`UserBlockedException` on its
+  throws clause — `UserBlockedException`'s first real use anywhere in the codebase.
 
 ### `engine.impl` package
 
@@ -222,6 +227,21 @@ flowchart TD
   verified directly, not just assumed). On success: `marketMaker.debit(subsidy)`,
   `event.getMarketMakerAccount().credit(subsidy)`, `event.open()`, return `toStatusDto(event)`
   — same mapper every other method already shares, no new DTO needed.
+  **participateInEvent-username stage:** `participateInEvent` gains `String username`, after
+  the existing `findActiveEvent(eventId)` call (position unchanged): `users.get(username)` →
+  `UserNotFoundException` if absent, then `buyer.isBlocked()` → `UserBlockedException` if
+  true, both checked before delegating to `TradeExecutor.participate` — a rejection here
+  mutates nothing, same shape `openEvent` established. `toUserDetailDto()`'s
+  `activeParticipations` is real now (was hardcoded `List.of()`): for each currently-loaded
+  event, if the user has ≥1 trade attributed to them (via the new
+  `Trade.getBuyerUsername()`), a `UserEventParticipationDto` is built by the new
+  `toParticipationDto()` — that user's own trade history newest-first, per-option shares
+  held/amount paid summed from their own trades only (LMSR shares aren't transferable, so
+  "held" is simply "bought"), total commission paid, and the winning option if closed.
+  `profitOrLoss` stays `null` for LMSR, matching this DTO's own skeleton-stage convention
+  (reserved for Order Book). Deliberately **not** filtered to `EventStatus.ACTIVE` — a
+  `CLOSED` event the user participated in still appears, per
+  `exercise2-requirements.md`'s own worked description of what a closed entry shows.
 
 ### `engine.domain` package
 
@@ -271,6 +291,13 @@ the intentionally top-level, `ui`-facing packages.
   built-in serialization preserves that reference identity across a save/load round-trip
   (verified explicitly by `SaveLoadStateTest.roundTripsEveryFieldAndPreservesObjectIdentity()`).
   `timestamp`'s type, `java.time.LocalDateTime`, is already `Serializable` in the JDK.
+  **participateInEvent-username stage:** gained a 7th field, `buyerUsername` — the same
+  null-on-old-`.gmstate`-files safety already established for `User`/`EngineStateSnapshot`
+  (`serialVersionUID` stays `1L`; an old saved `Trade` simply deserializes with
+  `buyerUsername == null`, so `EngineImpl.toParticipationDto()`'s `.equals()` check against a
+  known-non-null username treats that correctly as "unattributed," never NPEs). Set by
+  `TradeExecutor.participate()` from the resolved `User` it now receives
+  (`buyer.getName()`), not looked up separately.
 
 #### `MarketMakerAccount` (`engine/src/engine/domain/MarketMakerAccount.java`)
 - **What it is:** A small class holding two numbers: the account's current balance and its
@@ -496,6 +523,16 @@ the intentionally top-level, `ui`-facing packages.
   and — for the overflow guard specifically — both the exact 100,000-share/b=100 case that
   surfaced the bug and a just-under-the-threshold case confirming legitimate large purchases
   still work), run by the same `test.bat` as `LmsrMathTest`.
+  **participateInEvent-username stage:** `participate()` gains a `User buyer` parameter — the
+  *resolved* object, not a username string, matching this class's own stated principle of
+  never looking things up itself (same as it already receives a resolved `Event`, never an
+  id). After the existing cost/commission math produces `totalPaid`, one new line,
+  `buyer.debit(totalPaid)` — the *same* value already credited to the `MarketMakerAccount`
+  a line above it, not recomputed, so the two sides can never drift apart (verified directly
+  against source, not just asserted, when this was implemented). No affordability check here:
+  per CLAUDE.md Section 4 the trade completes even if it leaves the buyer negative;
+  `User.isBlocked()` (already derived, no new state) picks that up automatically from that
+  point on. The new `Trade` records `buyer.getName()` as its `buyerUsername`.
   **Save/Load-State bonus stage:** `saveState()` guards on `events.isEmpty()` (same
   `InvalidCommandStateException` + `NO_FILE_LOADED_MESSAGE` pattern `findEvent()` already uses),
   then delegates the actual serialization to `engine.impl.state.StateFileManager.save()`.
@@ -1006,6 +1043,13 @@ the intentionally top-level, `ui`-facing packages.
   the user this is an accepted consequence of `ui.Main` being kept only as a working reference
   until the JavaFX UI fully replaces it, not something to fix here.
 
+  **participateInEvent-username stage:** confirms the above rather than changing it —
+  `IEngine.participateInEvent` gained a required `username` parameter, so Command 4's call
+  site gained a `CONSOLE_PLACEHOLDER_USERNAME` constant (`"console"`) purely to keep
+  compiling. Its value is genuinely inert: `findActiveEvent`'s status check (see above) always
+  throws before this placeholder is ever read, since no event this console can load is ever
+  anything but `NOT_STARTED`. No real console user-selection UX was invented for it.
+
 #### `GuessMarketApp` (`ui/src/ui/GuessMarketApp.java`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A `javafx.application.Application` subclass — the project's first JavaFX
   entry point. `main()` calls the inherited `launch(args)`; `start(Stage)` loads
@@ -1039,6 +1083,20 @@ the intentionally top-level, `ui`-facing packages.
 - **What it connects to:** Instantiated automatically by `FXMLLoader` while loading
   `MainView.fxml`; will be reused by `GuessMarketApp` (via `loader.getController()`) once
   event-handling logic is added in a later step.
+  **(Later stages, not individually logged here, added the Load File flow, the Events tab's
+  list/details/participation, and the Users tab's list/details — see `PROGRESS_LOG.md` for
+  each.)** **participateInEvent-username stage:** the Events tab's standalone participate
+  form and the Users tab's now-live one (previously read-only) are the *same* shared
+  component — `buildParticipateForm(eventId, optionOneName, optionTwoName, fixedUsername,
+  onSuccess)`. A non-null `fixedUsername` (Users tab, already viewing that user's own area)
+  shows a fixed `Label`; `null` (Events tab, standalone) shows a `ComboBox` populated from
+  `listUsers()`. `onSuccess: Consumer<EventStatusDto>` lets each call site redraw itself its
+  own way after a purchase — the Events tab just calls `renderEventDetails` again; the Users
+  tab re-fetches the *whole* `UserDetailDto` and rebuilds all three sections (a purchase
+  changes the balance badge and that event's participation entry, not only the sub-panel
+  being viewed), then re-selects the same event afterward so the user doesn't lose their
+  place. `submitPurchase` now also calls `refreshUsersList()` after every purchase — a
+  purchase always changes some user's balance, regardless of which tab triggered it.
 
 #### `MainView.fxml` (`ui/resources/ui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +

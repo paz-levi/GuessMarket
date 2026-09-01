@@ -7,6 +7,7 @@ import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
+import engine.domain.User;
 import engine.domain.lmsr.LmsrMath;
 import exception.IllegalTradeException;
 
@@ -21,8 +22,8 @@ public final class TradeExecutor {
     private TradeExecutor() {
     }
 
-    // Executes a share purchase against an ACTIVE event: validates the request, runs the LMSR cost/commission math, mutates the event, and records the trade.
-    public static Trade participate(Event event, int optionNumber, int shareQuantity) {
+    // Executes a share purchase against an ACTIVE event: validates the request, runs the LMSR cost/commission math, mutates the event, debits the buyer, and records the trade.
+    public static Trade participate(Event event, User buyer, int optionNumber, int shareQuantity) {
         validateOptionNumber(event, optionNumber);
         if (shareQuantity <= 0) {
             throw new IllegalTradeException("Share quantity must be a positive integer; got " + shareQuantity + ".");
@@ -46,8 +47,13 @@ public final class TradeExecutor {
         MarketMakerAccount account = event.getMarketMakerAccount();
         account.credit(totalPaid);
         account.addCommissionCollected(commissionAmount);
+        // Same totalPaid value credited above, not recomputed, so the MM account and the buyer's balance can never drift apart.
+        // No affordability pre-check here, per CLAUDE.md Section 4: the trade completes even if it leaves the buyer negative;
+        // User.isBlocked() picks that up automatically from this point on.
+        buyer.debit(totalPaid);
 
-        Trade trade = new Trade(chosenOption, shareQuantity, cost / shareQuantity, commissionAmount, totalPaid, LocalDateTime.now());
+        Trade trade = new Trade(chosenOption, shareQuantity, cost / shareQuantity, commissionAmount, totalPaid,
+                LocalDateTime.now(), buyer.getName());
         event.addTrade(trade);
         return trade;
     }

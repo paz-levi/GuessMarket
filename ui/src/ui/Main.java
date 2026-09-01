@@ -25,6 +25,9 @@ public final class Main {
     private static final String SEPARATOR = "-".repeat(60);
     private static final String EVENT_SEPARATOR = "-".repeat(40);
     private static final String INDENT = "    ";
+    // This console has no user concept, and any event it can load is permanently NOT_STARTED (no openEvent command
+    // exists here) -- findActiveEvent's status check always throws before this placeholder is ever actually used.
+    private static final String CONSOLE_PLACEHOLDER_USERNAME = "console";
 
     private Main() {
     }
@@ -148,7 +151,7 @@ public final class Main {
         int shareQuantity = readInt(scanner, "Enter the number of shares to buy: ");
 
         try {
-            printTradeConfirmation(engine.participateInEvent(eventId, optionNumber, shareQuantity));
+            printTradeConfirmation(engine.participateInEvent(eventId, CONSOLE_PLACEHOLDER_USERNAME, optionNumber, shareQuantity));
         } catch (InvalidCommandStateException | EventNotFoundException | IllegalTradeException e) {
             System.out.println(e.getMessage());
         }

@@ -14,15 +14,18 @@ public final class Trade implements Serializable {
     private final double commissionPaid;
     private final double totalPaid;
     private final LocalDateTime timestamp;
+    // The username this trade is attributed to; null for a trade recorded before this field existed (an old .gmstate file).
+    private final String buyerUsername;
 
     public Trade(EventOption option, double quantity, double pricePerShare, double commissionPaid,
-                 double totalPaid, LocalDateTime timestamp) {
+                 double totalPaid, LocalDateTime timestamp, String buyerUsername) {
         this.option = option;
         this.quantity = quantity;
         this.pricePerShare = pricePerShare;
         this.commissionPaid = commissionPaid;
         this.totalPaid = totalPaid;
         this.timestamp = timestamp;
+        this.buyerUsername = buyerUsername;
     }
 
     public EventOption getOption() {
@@ -47,5 +50,9 @@ public final class Trade implements Serializable {
 
     public LocalDateTime getTimestamp() {
         return timestamp;
+    }
+
+    public String getBuyerUsername() {
+        return buyerUsername;
     }
 }

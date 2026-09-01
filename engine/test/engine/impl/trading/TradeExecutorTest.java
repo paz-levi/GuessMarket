@@ -12,6 +12,7 @@ import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
+import engine.domain.User;
 import exception.IllegalTradeException;
 
 // Covers the commission math for both collection modes, plus the option-number/share-quantity validation rules.
@@ -19,13 +20,16 @@ class TradeExecutorTest {
 
     private static final double LIQUIDITY_PARAMETER = 100;
     private static final double DELTA = 1e-9;
+    private static final String BUYER_NAME = "Buyer";
+    private static final double BUYER_INITIAL_BALANCE = 1_000_000.0;
 
     // ON_PURCHASE: commission is added on top of cost, and both amounts land in the account balance and the commission counter.
     @Test
     void onPurchaseCommissionIsAddedToCostAndCollectedImmediately() {
         Event event = newEvent(50, CommissionMode.ON_PURCHASE);
+        User buyer = newBuyer();
 
-        Trade trade = TradeExecutor.participate(event, 1, 100);
+        Trade trade = TradeExecutor.participate(event, buyer, 1, 100);
 
         double expectedCost = 62.01145069582775;
         double expectedCommission = expectedCost * 0.5;
@@ -37,14 +41,18 @@ class TradeExecutorTest {
         assertEquals(100, event.getOptionOne().getSharesOutstanding(), DELTA);
         assertEquals(expectedTotal, event.getMarketMakerAccount().getBalance(), DELTA);
         assertEquals(expectedCommission, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+        // The buyer is debited the exact same total already credited to the MM account -- not recomputed separately.
+        assertEquals(BUYER_INITIAL_BALANCE - expectedTotal, buyer.getBalance(), DELTA);
+        assertEquals(BUYER_NAME, trade.getBuyerUsername());
     }
 
     // ON_CLOSE: no commission is charged at purchase time — only the share cost is credited, and the commission counter stays at 0.
     @Test
     void onCloseChargesNoCommissionAtPurchaseTime() {
         Event event = newEvent(30, CommissionMode.ON_CLOSE);
+        User buyer = newBuyer();
 
-        Trade trade = TradeExecutor.participate(event, 2, 50);
+        Trade trade = TradeExecutor.participate(event, buyer, 2, 50);
 
         double expectedCost = 100 * Math.log(Math.exp(50.0 / 100) + Math.exp(0.0 / 100)) - 100 * Math.log(2);
 
@@ -53,6 +61,7 @@ class TradeExecutorTest {
         assertEquals(50, event.getOptionTwo().getSharesOutstanding(), DELTA);
         assertEquals(expectedCost, event.getMarketMakerAccount().getBalance(), DELTA);
         assertEquals(0.0, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+        assertEquals(BUYER_INITIAL_BALANCE - expectedCost, buyer.getBalance(), DELTA);
     }
 
     // Buying the other option leaves the first option's shares untouched — only the chosen option's q changes.
@@ -60,7 +69,7 @@ class TradeExecutorTest {
     void onlyTheChosenOptionsSharesChange() {
         Event event = newEvent(10, CommissionMode.ON_PURCHASE);
 
-        TradeExecutor.participate(event, 2, 20);
+        TradeExecutor.participate(event, newBuyer(), 2, 20);
 
         assertEquals(0, event.getOptionOne().getSharesOutstanding(), DELTA);
         assertEquals(20, event.getOptionTwo().getSharesOutstanding(), DELTA);
@@ -69,15 +78,15 @@ class TradeExecutorTest {
     @Test
     void rejectsOptionNumberOutsideOneOrTwo() {
         Event event = newEvent(10, CommissionMode.ON_PURCHASE);
-        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 0, 10));
-        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 3, 10));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, newBuyer(), 0, 10));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, newBuyer(), 3, 10));
     }
 
     @Test
     void rejectsNonPositiveShareQuantity() {
         Event event = newEvent(10, CommissionMode.ON_PURCHASE);
-        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, 0));
-        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, -5));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, newBuyer(), 1, 0));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, newBuyer(), 1, -5));
     }
 
     // The exact case found during the Day 7 integration pass: 100,000 shares against b=100 (q/b=1000) used to silently
@@ -85,14 +94,16 @@ class TradeExecutorTest {
     @Test
     void rejectsShareQuantityThatWouldOverflowLmsrMath() {
         Event event = newEvent(50, CommissionMode.ON_PURCHASE);
+        User buyer = newBuyer();
 
-        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, 1, 100_000));
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, buyer, 1, 100_000));
 
         assertEquals(0, event.getOptionOne().getSharesOutstanding(), DELTA);
         assertEquals(0, event.getOptionTwo().getSharesOutstanding(), DELTA);
         assertEquals(0.0, event.getMarketMakerAccount().getBalance(), DELTA);
         assertEquals(0.0, event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
         assertTrue(event.getTradeHistory().isEmpty());
+        assertEquals(BUYER_INITIAL_BALANCE, buyer.getBalance(), DELTA);
     }
 
     // A large but legitimate purchase, just under the overflow guard's threshold (q/b=699.99 against b=100), still succeeds with finite numbers.
@@ -100,7 +111,7 @@ class TradeExecutorTest {
     void allowsShareQuantityJustUnderTheOverflowGuard() {
         Event event = newEvent(50, CommissionMode.ON_PURCHASE);
 
-        Trade trade = TradeExecutor.participate(event, 1, 69_999);
+        Trade trade = TradeExecutor.participate(event, newBuyer(), 1, 69_999);
 
         assertTrue(Double.isFinite(trade.getTotalPaid()));
         assertTrue(Double.isFinite(trade.getPricePerShare()));
@@ -111,7 +122,7 @@ class TradeExecutorTest {
     @Test
     void onCloseCommissionIsDeductedFromPayoutAtCloseTime() {
         Event event = newEvent(20, CommissionMode.ON_CLOSE);
-        TradeExecutor.participate(event, 1, 30);
+        TradeExecutor.participate(event, newBuyer(), 1, 30);
         double balanceAfterPurchase = event.getMarketMakerAccount().getBalance();
 
         TradeExecutor.close(event, 1);
@@ -128,7 +139,7 @@ class TradeExecutorTest {
     @Test
     void onPurchaseFullPayoutIsDebitedAtCloseWithNoAdditionalCommission() {
         Event event = newEvent(15, CommissionMode.ON_PURCHASE);
-        TradeExecutor.participate(event, 2, 40);
+        TradeExecutor.participate(event, newBuyer(), 2, 40);
         double commissionAfterPurchase = event.getMarketMakerAccount().getTotalCommissionCollected();
         double balanceAfterPurchase = event.getMarketMakerAccount().getBalance();
 
@@ -143,7 +154,7 @@ class TradeExecutorTest {
     @Test
     void balanceCanGoNegativeAndIsNotClamped() {
         Event event = newEvent(0, CommissionMode.ON_PURCHASE);
-        TradeExecutor.participate(event, 1, 10);
+        TradeExecutor.participate(event, newBuyer(), 1, 10);
         double balanceAfterPurchase = event.getMarketMakerAccount().getBalance();
 
         TradeExecutor.close(event, 1);
@@ -163,5 +174,10 @@ class TradeExecutorTest {
         return new Event(1, "Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
                 commissionRate, commissionMode, (int) LIQUIDITY_PARAMETER,
                 new MarketMakerAccount(0.0), EventStatus.ACTIVE);
+    }
+
+    // A fresh buyer with a comfortably large balance, so none of these tests accidentally trip UserBlockedException territory.
+    private static User newBuyer() {
+        return new User(BUYER_NAME, BUYER_INITIAL_BALANCE);
     }
 }
