@@ -18,15 +18,26 @@ This file is a curated summary of spec v3's Exercise 2 section (+ Appendix B —
   unless explicitly overridden below. **Note the folder name has a leading space** — it's
   `" docs-reference"`, not `"docs-reference"`, in this repo. New Ex2 reference files go in
   the same (space-prefixed) folder — don't create a second, differently-named one.
-- ` docs-reference/exercise2-requirements.md` — **NEW**, general Ex2 functional requirements
-  (UI screens, users, MM responsibilities, event lifecycle, resize, bonuses, submission).
+- ` docs-reference/exercise2-requirements.md` — general Ex2 functional requirements (UI
+  screens, users, MM responsibilities, event lifecycle, resize, bonuses, submission).
 - ` docs-reference/lmsr-appendix.md` — still fully valid; LMSR math is unchanged in Ex2.
-- ` docs-reference/order-book-appendix.md` — **NEW**, needs to be added from spec Appendix B
-  before the Order Book stage starts.
-- ` docs-reference/xml-schema-appendix.md` — needs an Ex2 addendum (`GM-users`,
-  `GM-market-maker`, `GM-order-book`, `GM-method` as a choice). **The actual schema root
-  element is `Guess-Market` (hyphen)** — confirmed both in the XSD and in every sample XML
-  file — not "Guess Market" (space), which is only how the spec's own prose table renders it.
+- ` docs-reference/order-book-appendix.md` — Order Book mechanics + two worked numeric
+  examples (mint math, multi-order matching), already verified against the real matching
+  code during the Order Book core stage.
+- ` docs-reference/xml-schema-appendix.md` (Ex1) + ` docs-reference/xml-schema-appendix-ex2.md`
+  (the Ex2 addendum — `GM-users`, `GM-market-maker`, `GM-order-book`, `GM-method` as a
+  choice). **The actual schema root element is `Guess-Market` (hyphen)** — confirmed both in
+  the XSD and in every sample XML file — not "Guess Market" (space), which is only how the
+  spec's own prose table renders it.
+- ` docs-reference/ui-sketch-layout.md` — precise shape positions from the lecturer's sketch
+  (both screens), extracted directly rather than eyeballed. Source of truth for screen
+  proportions/structure.
+- ` docs-reference/lecture-transcript-notes.md` — key points from the lecturer's general Ex2
+  overview recording (module structure, packaging, what's confirmed vs. genuinely still
+  open).
+- ` docs-reference/lecture-notes-javafx.md` — key points from the lecturer's JavaFX-specific
+  teaching materials (MVC/`<fx:include>` conventions, threading, resource-path pitfalls),
+  cross-checked against what this repo actually does.
 
 If the answer isn't in `CLAUDE.md`, `ARCHITECTURE.md`, or the reference files, stop and ask.
 
@@ -355,6 +366,17 @@ reason. Default is a hand-written CSS file; revisit only after explicit confirma
    **not** — checked the docx directly (every "ממתינות/resting" mention is already captured
    in `order-book-appendix.md`, none address close-time behavior). Genuinely unresolved,
    not just uninvestigated — worth a direct forum question, same category as item 2.
+4. **Order Book close — architectural note for whenever it's implemented**, surfaced while
+   fixing the equivalent LMSR bug (winners never being paid, engine/PROGRESS_LOG entry
+   covers it): LMSR's fix determines each winner by replaying `Trade.buyerUsername` across
+   trade history, which works *only* because LMSR has no sell — trade history and final
+   holdings are the same thing. **Order Book is different: users can sell**, so net holdings
+   don't equal accumulated buy history. OB close must pay out from
+   `OptionBook.holdings` (the already-maintained per-user net-position map), not by
+   replaying trade history — do not copy the LMSR approach directly when this gets built.
+   Also still applies here: whether `ON_CLOSE` commission is even supported for Order Book
+   trades (deferred, unimplemented per the Order Book core stage), and the same
+   blocked-user-should-auto-unblock-on-credit principle LMSR's fix established.
 4. ~~Packaging~~ — **resolved**, see Section 1: only the JavaFX module's JAR ships.
 5. ~~JavaFX version~~ — **resolved in practice**: 25.0.4 in use; lecturer's recording says
    separate setup guides are coming, revisit only if those say otherwise.
