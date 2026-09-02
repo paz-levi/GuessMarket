@@ -6,6 +6,55 @@ scannable in seconds.
 
 ---
 
+### `3ea7430` — 2026-09-02 — docs: record Order Book close architecture note (holdings-based payout, not trade-history replay)
+`CLAUDE.md` reference-file list updated to reflect files that now actually exist
+(`order-book-appendix.md`, `xml-schema-appendix-ex2.md`, `ui-sketch-layout.md`,
+`lecture-transcript-notes.md`, `lecture-notes-javafx.md`), plus a substantive new open item
+(#4) in Section 8: a warning against copying `e6ddfa7`'s LMSR winner-payout fix directly onto
+Order Book's still-unimplemented close path. LMSR's fix determines each winner by replaying
+`Trade.buyerUsername` across trade history — correct *only* because LMSR has no sell, so trade
+history and final holdings coincide. Order Book allows selling, so net holdings can diverge
+from accumulated buy history; its close must pay out from `OptionBook.holdings` (the
+already-maintained per-user net-position map) instead. Also notes two things still apply from
+the LMSR fix when OB close is built: whether `ON_CLOSE` commission is even supported for Order
+Book trades (still undecided), and the blocked-user-auto-unblocks-on-credit principle.
+
+### `e6ddfa7` — 2026-09-02 — Fix TradeExecutor.close: winners were never paid, MM leftover never returned; 46/46 tests, add EngineImplTest for the two auth-guard cases
+**A real, severe bug: `close()` silently destroyed money and never paid winners.** Confirmed by
+reading the pre-fix source, not assumed — `close()` had no `User` parameter and no access to
+any user object at all. It was Ex1-era code, written before Users existed, that settled purely
+against `MarketMakerAccount`: the winning payout was debited from the event account and then
+credited to nobody, vanishing from the simulation. Any winner whose own purchase had pushed
+their balance negative stayed negative and permanently blocked even after winning — reproduced
+end to end against `test_files/ex2-small.xml` before the fix (a winner sat at −213.19,
+permanently blocked, despite holding the winning shares).
+
+Two fixes, both in `TradeExecutor.close()`: (1) new `payWinners()` walks the event's trade
+history and credits each winning trade's buyer `quantity` (less their own share of `ON_CLOSE`
+commission) — exactly the amount already debited in aggregate, so no money is created or
+destroyed, verified algebraically and by a dedicated conservation test; (2) new
+`returnLeftoverSubsidyToMarketMaker()`, per `exercise2-requirements.md`'s "leftover subsidy
+returns to the MM" rule — whatever remains in the account once payouts and commission settle is
+returned to the real MM's own balance, landing the account at exactly `0.0` (provably exact,
+not approximate: a value debited back verbatim is always `x − x == 0.0` in IEEE 754). Both fixes
+verified end to end against the same fixture: the previously-blocked winner went from −213.19
+to 86.81 and unblocked; the event account settled at exactly `0.00`; total money conserved to
+the penny across the whole cycle.
+
+Also: implementing the leftover-return fix broke four of the winner-payout fix's own
+pre-existing tests, all for the same root cause (none of them included a market-maker `User` in
+the map passed to `close()`, so the leftover had nowhere to land) — fixed properly rather than
+patched, one renamed (`balanceCanGoNegativeAndIsNotClamped` →
+`marketMakerAbsorbsANegativeLeftoverAndIsNotClamped`) since its original premise no longer
+holds now that the account is always zeroed by design. New `EngineImplTest.java` (no
+`EngineImpl` test suite existed before this) holds exactly two tests that need the real engine
+end to end: full-cycle money conservation through `IEngine` itself, and a permanent regression
+test for the closeEvent-refuses-Order-Book guard, which previously had none. 46/46 tests pass;
+an audit of the winner-payout fix's own prior test coverage against an 8-item checklist found 5
+genuine gaps, all closed here (multiple distinct winners, a buyer holding both winning and
+losing trades, a winning option nobody ever bought, multi-trade `ON_CLOSE` commission netting,
+and a blocked winner auto-unblocking).
+
 ### `f155a15` — 2026-09-01 — docs: sync CLAUDE.md ui/gui terminology after module split; add lecture transcript notes
 **Combined commit — its message describes only the docs half; the larger half is a module
 refactor.** Recorded here in full so `git log` alone doesn't undersell it.
