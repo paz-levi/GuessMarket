@@ -8,6 +8,10 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import dto.EventStatusDto;
+import dto.OrderSide;
+import dto.SubmitOrderRequestDto;
+import dto.TradingMethod;
+import dto.UserEventParticipationDto;
 import dto.UserSummaryDto;
 import engine.IEngine;
 import exception.IllegalTradeException;
@@ -57,6 +61,27 @@ class EngineImplTest {
         engine.openEvent(2, "Avrum"); // event 2 is the Order Book event in this fixture
 
         assertThrows(IllegalTradeException.class, () -> engine.closeEvent(2, "Avrum", 1));
+    }
+
+    // Regression: getUser's per-event participation entry reported TradingMethod.LMSR unconditionally, hardcoded
+    // in EngineImpl.toParticipationDto -- the same category of bug already fixed once in toStatusDto/toSummaryDto,
+    // but a separate, previously-unfixed occurrence, found by manual testing (an Order Book event's participation
+    // row showed "-- LMSR" on the Users tab). Avrum rests a sell from his own initial allocation and Menash's buy
+    // fills it, so Menash gets a real Trade record (the only way to appear in this trade-history-based list at all).
+    @Test
+    void getUserReportsOrderBookTradingMethodNotHardcodedLmsr() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(FIXTURE_FILE);
+        engine.openEvent(2, "Avrum"); // event 2 is Order Book; Avrum now holds initial-allocation shares of both options
+
+        engine.submitOrder(new SubmitOrderRequestDto("Avrum", 2, 1, OrderSide.SELL, 5, 0.50)); // rests, empty book
+        engine.submitOrder(new SubmitOrderRequestDto("Menash", 2, 1, OrderSide.BUY, 5, 0.55));  // crosses, fills
+
+        UserEventParticipationDto participation = engine.getUser("Menash").activeParticipations().stream()
+                .filter(p -> p.eventId() == 2)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected Menash to have a participation entry for event 2"));
+        assertEquals(TradingMethod.ORDER_BOOK, participation.tradingMethod());
     }
 
     // Sums every currently loaded user's balance plus one event's own account balance -- the full pool of money

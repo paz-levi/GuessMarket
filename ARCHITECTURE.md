@@ -12,6 +12,7 @@ flowchart TD
     subgraph GUI["gui module (JavaFX, ships for Ex2)"]
         GuessMarketApp["GuessMarketApp (active entry point, run.bat)"]
         MainViewController["MainViewController"]
+        OrderBookPanelBuilder["OrderBookPanelBuilder"]
     end
 
     subgraph ENGINE["engine module"]
@@ -265,6 +266,25 @@ flowchart TD
   (reserved for Order Book). Deliberately **not** filtered to `EventStatus.ACTIVE` — a
   `CLOSED` event the user participated in still appears, per
   `exercise2-requirements.md`'s own worked description of what a closed entry shows.
+  **Order Book order-submission-UI stage — a real bug, found by manual testing, same category
+  as the `toStatusDto`/`toSummaryDto` fix from the Order Book core stage but a separate,
+  previously-unfixed occurrence:** `toParticipationDto()` hardcoded `TradingMethod.LMSR`
+  unconditionally, so an Order Book event's participation row on the Users tab read "— LMSR"
+  regardless of its real method. Now reads `event.getTradingMethod()`. Regression test:
+  `EngineImplTest.getUserReportsOrderBookTradingMethodNotHardcodedLmsr`.
+  **A second, deeper gap found while tracing this one, not fixed here — flagged rather than
+  silently expanded into this bugfix:** participation detection itself
+  (`toUserDetailDto()`'s `event.getTradeHistory().stream().anyMatch(... trade.getBuyerUsername()
+  ...)`) only ever checks a trade's **buyer**. `Trade` has no `sellerUsername` field at all
+  (confirmed by reading `Trade.java`'s fields) — so for an Order Book event, a user who only
+  ever *sells* is structurally invisible to this check and never appears in their own
+  participation list, even though `OptionBook.holdings` (already used correctly elsewhere, e.g.
+  `EngineImpl.toParticipantDtos`) knows perfectly well what they hold. Same root cause as the
+  OB-close architectural note already in `CLAUDE.md` Section 8, item 4 — LMSR-shaped,
+  trade-history-based logic doesn't generalize to a mechanism where users can sell. Worth its
+  own stage, not a quiet addition here: fixing it properly means deciding how
+  `optionOneSharesHeld`/`optionOneAmountPaid` etc. should even be computed for Order Book (net
+  holdings vs. amount paid via trades only), not just widening one `anyMatch` check.
   **Order Book core stage:** `submitOrder` is real (returns `OrderResultDto`), and three
   existing methods gained branches:
   - `openEvent` computes one `openingCost` variable by method — `initial` for Order Book,
@@ -785,6 +805,17 @@ prices from whatever counterparties are actually resting. All three classes are 
     appendix's Section 4 walkthrough fill-by-fill (20 @ `$0.50`, then 10 @ `$0.48`, Carol's 5
     left resting, Zoe's `$14.80`) plus book independence, time priority on equal prices,
     partial fills, non-crossing orders, both commission modes, and every rejection path.
+  - **Order Book order-submission-UI stage: self-trading, confirmed by manual testing (a real
+    user's own SELL matched their own resting BUY), not just an assumption.** `executeFill`
+    resolves `buyer`/`seller` via `users.get(...)` for both sides — when the trader matches
+    their own resting order, both lookups resolve to the exact same `User` instance, so
+    `buyer.debit(...)` and `seller.credit(...)` land on one object rather than two. Previously
+    flagged in an earlier session note as an untested assumption ("object identity makes this
+    automatically safe") — now verified directly, not just trusted, by
+    `selfTradeNetsSharesAndMoneyCorrectlyForTheSameUser`: holdings net back to exactly the
+    trader's starting position (a `+quantity` and `-quantity` on the same username cancel), and
+    under `ON_PURCHASE` the only real balance effect is losing the commission to the MM account
+    — she pays herself the share value and gets it back, but still pays commission on it.
 
 ### `engine.impl.state` package
 
@@ -1443,6 +1474,94 @@ decided explicitly at submission time rather than folded silently into a refacto
   control that can only fail" principle already applied to Open/Buy — the engine already
   refuses to close an Order Book event outright (Order Book settlement isn't implemented yet),
   so showing the form would only ever produce a guaranteed rejection.
+  **Order Book order-submission-UI stage:** `buildActiveControls` gains its real branch —
+  `tradingMethod == ORDER_BOOK` now delegates entirely to `OrderBookPanelBuilder.build(...)`
+  (see its own entry below) instead of falling through to the LMSR participate form, which was
+  only ever a placeholder shown for every trading method until this stage existed.
+  `TradingMethod` has exactly two values, confirmed by reading the enum, so once `ORDER_BOOK`
+  is peeled off first, everything below it is unconditionally the LMSR case — the old
+  `if (tradingMethod != LMSR) return participateForm;` guard is gone, not left as dead code.
+  Six members — `engine`, `refreshEventsList()`, `refreshUsersList()`, both `showErrorAlert`
+  overloads, `buildUsernameComboBox()`, `formatMoney(double)` — widen from `private` to
+  package-private so `OrderBookPanelBuilder` (a separate class, same `gui` package) can reuse
+  them rather than duplicating; none go `public`, so nothing is exposed outside the module.
+  Verified at runtime, not just by reading the source: a reflection-based harness invoked the
+  real `buildActiveControls` against a live `IEngine` on both the Events-tab (`fixedUsername`
+  null → username `ComboBox`) and Users-tab (`fixedUsername` set → fixed `Label`) paths, walked
+  the actual returned scene graph, and confirmed both option-book headers, the participants
+  section (already showing the MM's initial allocation), the submission form, and the absence
+  of a Close button — then submitted a real order through the engine and re-rendered, confirming
+  the resting order it left behind actually appears in the redrawn book.
+  **Found by manual testing, fixed the same stage — then refined once, narrowing what gets
+  hidden.** `appendEventStatusDisplay` used to show a misleading `price 0.00` for every Order
+  Book event (`optionOnePrice`/`optionTwoPrice` are always `0.0` there — see
+  `EngineImpl.toStatusDto`'s own comment on why). A first pass hid the whole four-line block
+  (per-option price/shares, MM balance, commission) for `ORDER_BOOK` — too broad: shares
+  outstanding, MM account balance, and total commission collected are all still real and
+  meaningful for an Order Book event (the event account genuinely holds the MM's initial
+  funding plus every fill's accumulated commission), and none of that is shown anywhere else —
+  `OrderBookPanelBuilder`'s panels cover book state and per-user holdings, not the event
+  account. **Only the LMSR-specific "price" concept is actually meaningless there.** New
+  `formatOptionLine(optionName, price, shares, isLmsr)` renders `"<name>: price X, shares Y"`
+  for LMSR but `"<name>: shares Y"` alone for Order Book — one word conditional, not a whole
+  line — while the MM-balance and commission-collected lines are now shown unconditionally for
+  both methods, same as the header/MM-name/trade-history lines already were. Verified at
+  runtime both times: a reflection-based harness called the real method against both an LMSR
+  and an Order Book event loaded from the same file — first confirming the (too-broad) all-four
+  hidden, then confirming the refined behavior: no `"price "` text anywhere in the Order Book
+  event's rendering, but both `shares` lines and both account lines present in both cases.
+
+#### `OrderBookPanelBuilder` (`gui/src/gui/OrderBookPanelBuilder.java`) — Order Book order-submission-UI stage, new
+- **What it is:** The Order Book event-detail panel — both options' order books side by side,
+  the participants list below them, and the order submission form below that — plus the
+  submission handling and confirmation Alert. A plain static-method helper class, not FXML and
+  not a separate `Controller`.
+- **Why it exists:** Per CLAUDE.md's recorded `<fx:include>`-deferral decision (Section 2):
+  `MainViewController` was already growing into a god-class, and a real inter-controller
+  communication design (an event opened from one tab needing to refresh another) isn't cheap
+  regardless of when it's tackled — so new large UI blocks go into helper classes like this one
+  that the controller calls into, deferring the harder split to a later polish stage rather than
+  committing to it before the full picture (Order Book UI, still not mint or OB close) is known.
+- **What it connects to:** Called from `MainViewController.buildActiveControls` for
+  `ORDER_BOOK` events, taking a `MainViewController controller` reference — not a pile of
+  individual callback parameters — to reach the six members widened above; the least new
+  plumbing, and the most direct reading of CLAUDE.md's own stated reason for the split (a
+  file-size concern, not a request for full architectural decoupling).
+  - Reads `EventStatusDto.orderBooks`/`.participants`, both already populated by the Order Book
+    core stage's `EngineImpl.toStatusDto`. Each `OrderBookSnapshotDto`'s five nullable `Double`
+    stats (LAST/BID/ASK/MID/SPREAD) render through a new `formatNullableMoney` — `"—"` for
+    `null`, never a raw `null` or a misleading `0.0`. Resting bids/asks render as plain `Label`
+    rows (matching `buildTradeHistorySection`'s existing lightweight style for read-only rows,
+    not a `ListView` with a custom cell factory), with `"No resting bids."`/`"No resting asks."`
+    placeholders — same convention as `"No trades yet."`.
+  - The submission form mirrors `buildParticipateForm`'s exact shape: `fixedUsername` → a fixed
+    `Label`, else a `ComboBox` via the (now shared) `buildUsernameComboBox()`; option picked by
+    name via a `ComboBox`, never a raw number. **Quantity and price are plain `TextField`s, not
+    `Spinner`s** — deliberately avoiding the exact bug already found and fixed once this session
+    on the LMSR form (`Spinner` reverts to its last valid value on focus-lost, before the click
+    handler ever runs). Parsed with `Double.parseDouble`, not `parseInt` — `SubmitOrderRequestDto`
+    and `OrderDto` both type `quantity` as `double`, unlike LMSR's `int shareQuantity`, so Order
+    Book genuinely allows fractional shares at the type level and the UI doesn't impose a
+    restriction the engine doesn't have.
+  - **UI-level validation stays deliberately minimal**, matching `handleBuyClick`'s existing
+    philosophy: is something selected, does the text parse as a number. Every business rule
+    (price ceiling, non-positive quantity, selling unheld shares, a blocked user) is already
+    enforced server-side by `IEngine.submitOrder` — none of it is duplicated here.
+  - On submit: builds a `SubmitOrderRequestDto`, calls `IEngine.submitOrder`, shows a
+    confirmation `Alert` (mirroring `showTradeConfirmation`'s pattern), then redraws through the
+    same `onSuccess` callback already threaded through `buildActiveControls` — from
+    `OrderResultDto.eventStatus()`, **not a second `getEventStatus` call** — and refreshes both
+    lists. Confirmed with the user during planning: the spec text named only the events list,
+    but every other trading action in this file (Buy, Open, Close) refreshes both, since a fill
+    moves money between a buyer and seller — omitting `refreshUsersList()` here would leave the
+    Users tab's balance/blocked column stale in exactly the way every sibling action avoids.
+  - **One deliberate wording choice beyond the literal spec:** the confirmation Alert labels its
+    final line "Total paid" for a `BUY` but "**Total received**" for a `SELL`, since
+    `OrderResultDto.totalPaid()`'s own doc comment defines it that way — always saying "paid"
+    would misdescribe a seller's proceeds. Average fill price (`Double`, null when the order
+    rested in full with zero fills) renders through the same `formatNullableMoney`.
+  - Explicitly out of scope, unchanged by this stage: mint (a separate, later stage) and Order
+    Book `closeEvent` (still guarded server-side and hidden client-side).
 
 #### `MainView.fxml` (`ui/resources/ui/MainView.fxml` → now `gui/resources/gui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +

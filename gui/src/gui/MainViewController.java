@@ -63,7 +63,8 @@ public class MainViewController {
     @FXML
     private VBox userDetailsBox;
 
-    private IEngine engine;
+    // Package-private (not private): OrderBookPanelBuilder, a separate class in this same package, needs it.
+    IEngine engine;
 
     // Injected once by GuessMarketApp right after loading the FXML; the same engine instance is reused for every load, never re-created.
     void setEngine(IEngine engine) {
@@ -144,7 +145,8 @@ public class MainViewController {
     }
 
     // Re-reads the full event list from the engine and refreshes the Events tab; called right after a successful load.
-    private void refreshEventsList() {
+    // Package-private: also called from OrderBookPanelBuilder after a successful order submission.
+    void refreshEventsList() {
         try {
             List<EventSummaryDto> events = engine.listEvents();
             eventsListView.getItems().setAll(events);
@@ -155,7 +157,8 @@ public class MainViewController {
     }
 
     // Re-reads the full user list from the engine and refreshes the Users tab; called right after a successful load.
-    private void refreshUsersList() {
+    // Package-private: also called from OrderBookPanelBuilder after a successful order submission.
+    void refreshUsersList() {
         try {
             List<UserSummaryDto> users = engine.listUsers();
             usersListView.getItems().setAll(users);
@@ -282,16 +285,18 @@ public class MainViewController {
         };
     }
 
-    // An ACTIVE event always shows the Buy form. It additionally shows a Close form, but only for LMSR events --
-    // the engine refuses to close an Order Book event outright (settlement for that method isn't implemented yet),
-    // so per the same "never show a control that can only fail" principle already applied above, the Close form is
-    // hidden entirely for tradingMethod == ORDER_BOOK rather than left for the user to hit a guaranteed rejection.
+    // An ACTIVE event shows one of two entirely different control sets depending on trading method. Order Book gets
+    // its own real panel (book display + participants + order form) instead of the LMSR participate form, and never
+    // a Close form -- the engine refuses to close an Order Book event outright (settlement isn't implemented yet),
+    // so per the same "never show a control that can only fail" principle already applied above, Close stays hidden
+    // rather than left for the user to hit a guaranteed rejection. TradingMethod has exactly two values, so once
+    // ORDER_BOOK is peeled off here, everything below is unconditionally the LMSR case.
     private VBox buildActiveControls(EventStatusDto status, String fixedUsername, Consumer<EventStatusDto> onSuccess) {
+        if (status.tradingMethod() == TradingMethod.ORDER_BOOK) {
+            return OrderBookPanelBuilder.build(this, status, fixedUsername, onSuccess);
+        }
         VBox participateForm = buildParticipateForm(status.eventId(), status.optionOneName(), status.optionTwoName(),
                 fixedUsername, onSuccess);
-        if (status.tradingMethod() != TradingMethod.LMSR) {
-            return participateForm;
-        }
         return new VBox(10, participateForm, new Separator(),
                 buildCloseEventForm(status.eventId(), status.optionOneName(), status.optionTwoName(), onSuccess));
     }
@@ -365,14 +370,19 @@ public class MainViewController {
     // Appends the read-only event status display (prices/shares, account state, winner-if-closed, trade history) to the
     // given container. Shared by the Events tab's full detail panel (which also appends a participate form) and the
     // Users tab's read-only per-event sub-panel (which deliberately doesn't).
+    // Only the LMSR-specific "price" concept is hidden for an Order Book event (optionOnePrice/optionTwoPrice are
+    // 0.0 there -- see EngineImpl.toStatusDto's own comment on why; the real per-option price picture lives in
+    // OrderBookPanelBuilder's book display instead). Everything else here stays real and meaningful for BOTH
+    // methods and is shown either way: shares outstanding (the total ever issued for that option), MM account
+    // balance, and total commission collected -- the event account still holds the MM's initial funding plus every
+    // fill's accumulated commission for an Order Book event too, and nothing else currently displays either number.
     private static void appendEventStatusDisplay(VBox container, EventStatusDto status) {
+        boolean isLmsr = status.tradingMethod() == TradingMethod.LMSR;
         container.getChildren().addAll(
                 new Label(status.eventName() + "  (id " + status.eventId() + ")  —  " + status.status()),
                 new Label("Market Maker: " + status.marketMakerUsername()),
-                new Label(status.optionOneName() + ": price " + formatMoney(status.optionOnePrice())
-                        + ", shares " + formatMoney(status.optionOneShares())),
-                new Label(status.optionTwoName() + ": price " + formatMoney(status.optionTwoPrice())
-                        + ", shares " + formatMoney(status.optionTwoShares())),
+                new Label(formatOptionLine(status.optionOneName(), status.optionOnePrice(), status.optionOneShares(), isLmsr)),
+                new Label(formatOptionLine(status.optionTwoName(), status.optionTwoPrice(), status.optionTwoShares(), isLmsr)),
                 new Label("Market maker balance: " + formatMoney(status.marketMakerBalance())),
                 new Label("Total commission collected: " + formatMoney(status.totalCommissionCollected()))
         );
@@ -381,6 +391,12 @@ public class MainViewController {
         }
         container.getChildren().add(new Separator());
         container.getChildren().add(buildTradeHistorySection(status.tradeHistory()));
+    }
+
+    // One option's summary line: "price X, shares Y" for LMSR (the curve-price concept is real there), "shares Y"
+    // alone for Order Book (price is meaningless there, always 0.0) -- shares outstanding stays meaningful either way.
+    private static String formatOptionLine(String optionName, double price, double shares, boolean isLmsr) {
+        return optionName + ": " + (isLmsr ? "price " + formatMoney(price) + ", " : "") + "shares " + formatMoney(shares);
     }
 
     // Builds the trade-history block: a header plus one row per trade (already newest-first, per EventStatusDto's own contract), or a placeholder when empty.
@@ -436,7 +452,8 @@ public class MainViewController {
 
     // Builds a username picker populated from the currently loaded users, for the Events tab's standalone participate
     // form (which has no already-selected user to bind to, unlike the Users tab's).
-    private ComboBox<String> buildUsernameComboBox() {
+    // Package-private: also called from OrderBookPanelBuilder, for the same reason.
+    ComboBox<String> buildUsernameComboBox() {
         ComboBox<String> comboBox = new ComboBox<>();
         try {
             for (UserSummaryDto user : engine.listUsers()) {
@@ -517,12 +534,14 @@ public class MainViewController {
     }
 
     // Pins Locale.US so money/share values can't silently print a comma on a non-English-default JVM — same discipline ui.Main already applies.
-    private static String formatMoney(double value) {
+    // Package-private: also called from OrderBookPanelBuilder, for the same values (quantities and prices alike).
+    static String formatMoney(double value) {
         return String.format(Locale.US, "%.2f", value);
     }
 
     // Shows a plain Alert for any background-task or engine-call failure — functional only, wording/styling is a later step.
-    private void showErrorAlert(String headerText, Throwable failure) {
+    // Package-private: also called from OrderBookPanelBuilder, so business-rule failures from submitOrder display the same way.
+    void showErrorAlert(String headerText, Throwable failure) {
         String message = failure instanceof GuessMarketException
                 ? failure.getMessage()
                 : String.valueOf(failure);
@@ -530,7 +549,8 @@ public class MainViewController {
     }
 
     // Shows a plain Alert for a ui-level error that never reached the engine (e.g. unparsable input) — same display, no exception involved.
-    private void showErrorAlert(String headerText, String message) {
+    // Package-private: also called from OrderBookPanelBuilder, for its own ui-level input checks.
+    void showErrorAlert(String headerText, String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.setTitle("Error");
         alert.setHeaderText(headerText);

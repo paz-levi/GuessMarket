@@ -385,7 +385,7 @@ public class EngineImpl implements IEngine {
             totalCommissionPaid += trade.getCommissionPaid();
         }
         EventOption winningOption = event.getWinningOption();
-        return new UserEventParticipationDto(event.getId(), event.getName(), TradingMethod.LMSR, event.getStatus(),
+        return new UserEventParticipationDto(event.getId(), event.getName(), event.getTradingMethod(), event.getStatus(),
                 userTradeHistory, optionOneShares, optionTwoShares, optionOneAmountPaid, optionTwoAmountPaid,
                 totalCommissionPaid, winningOption != null ? winningOption.getName() : null, null);
     }

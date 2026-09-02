@@ -246,6 +246,44 @@ class OrderBookExecutorTest {
         assertTrue(fixture.users.get("Broke").isBlocked());
     }
 
+    // A user matching their own resting order (self-trade): reproduced from a real manual-testing session (Avrum's
+    // SELL matched his own resting BUY). users.get(resting.getUsername()) and users.get(trader's own username)
+    // resolve to the SAME User object here, so OrderBookExecutor.executeFill's buyer/seller are literally identical
+    // -- verified, not just trusted from object identity, since debit-then-credit on one object is a real code path
+    // that could silently double-charge or double-pay if written differently (e.g. two separate lookups that happened
+    // to diverge). Under ON_PURCHASE commission, the only real effect on the trader is losing the commission to the
+    // MM account: she pays herself the share value and receives it back, netting to zero, but still pays commission.
+    @Test
+    void selfTradeNetsSharesAndMoneyCorrectlyForTheSameUser() {
+        Fixture fixture = new Fixture(10, CommissionMode.ON_PURCHASE);
+        fixture.giveShares("Zoe", 1, 20);
+        fixture.restBid("Zoe", 1, 20, 0.50); // Zoe's own resting bid
+
+        List<Trade> fills = fixture.submit("Zoe", 1, OrderSide.SELL, 20, 0.45); // matches her own bid
+
+        assertEquals(1, fills.size());
+        assertEquals("Zoe", fills.get(0).getBuyerUsername()); // she's the buyer in this fill too, not just the seller
+
+        double value = 20 * 0.50;
+        double commission = value * 0.10;
+        // buyer.debit(value + commission) then seller.credit(value) on the SAME object nets to exactly -commission --
+        // she is not charged twice, and the share value does not vanish or duplicate.
+        assertEquals(START_BALANCE - commission, fixture.balanceOf("Zoe"), DELTA);
+
+        // Holdings: +20 (as buyer) and -20 (as seller) on the same username net back to her ORIGINAL 20 -- unchanged,
+        // not zeroed and not doubled.
+        assertEquals(20, fixture.book(1).getHolding("Zoe"), DELTA);
+
+        // Her resting bid is fully consumed, and nothing rests on the other side either.
+        assertTrue(fixture.book(1).getBids().isEmpty());
+        assertTrue(fixture.book(1).getAsks().isEmpty());
+
+        // The commission genuinely left the system for her and landed on the MM account -- not evaporated, not
+        // duplicated. System-wide conservation (Zoe's loss == the account's gain) holds even for a self-trade.
+        assertEquals(commission, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(commission, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+    }
+
     // Small harness: one Order Book event, three funded users, and helpers to seed books and holdings directly.
     private static final class Fixture {
         private final Event event;
