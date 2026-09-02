@@ -152,7 +152,7 @@ public class EngineImpl implements IEngine {
             throw new IllegalTradeException("Event id " + eventId
                     + " is an Order Book event; closing Order Book events is not yet supported in this build.");
         }
-        TradeExecutor.close(event, winningOptionNumber);
+        TradeExecutor.close(event, winningOptionNumber, users);
         return toStatusDto(event);
     }
 

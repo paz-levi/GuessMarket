@@ -666,6 +666,77 @@ prices from whatever counterparties are actually resting. All three classes are 
   per CLAUDE.md Section 4 the trade completes even if it leaves the buyer negative;
   `User.isBlocked()` (already derived, no new state) picks that up automatically from that
   point on. The new `Trade` records `buyer.getName()` as its `buyerUsername`.
+  **Winner-payout fix — a severe bug, found by manual testing.** `close()` gains a
+  `Map<String, User> users` parameter and a new private `payWinners()`. Until this fix
+  **`close()` credited no user's balance anywhere** — it had no `User` parameter and no access
+  to any user object at all. It was Ex1-era code, written before Users existed, that settled
+  purely against `MarketMakerAccount`: the payout was debited from the event account and then
+  **went nowhere, destroying the money.** Winners whose purchases had pushed them negative
+  stayed negative and permanently `isBlocked()` even after winning. `Trade.buyerUsername` had
+  existed since the participateInEvent-username stage, but nothing at close time read it.
+  `payWinners()` now walks the event's trade history, and for every trade on the winning option
+  credits that trade's buyer `quantity` (each winning share settles at 1.0), less that trade's
+  own share of the commission under `ON_CLOSE`. **This is exactly the amount already debited
+  from the account** — summed over the winning option's trades, `Σquantity` *is*
+  `winningOption.getSharesOutstanding()`, so the existing debit and the new credits are equal by
+  construction, with nothing recomputed and no rounding drift (the same discipline
+  `participate()` uses with its single shared `totalPaid`). Trades are matched to the winning
+  option by **reference identity, not `equals`** — a `Trade`'s option always aliases the event's
+  own `EventOption`, which `SaveLoadStateTest` already asserts survives serialization. A trade
+  with a null `buyerUsername` (from a `.gmstate` written before that field existed) is skipped
+  rather than failing the close, the same tolerance documented for `EngineStateSnapshot.users`.
+  **Note on the diagnostic evidence:** the symptom that surfaced this was an event whose account
+  balance exactly equalled its commission collected, which looked like "the payout was never
+  deducted" — it wasn't. Subsidy + share proceeds exactly fund an LMSR payout by design, so the
+  residual *is* the commission; the account was always correct, and only the payout's
+  destination was missing. Covered by six new `TradeExecutorTest` cases, including
+  `closeConservesTotalMoneyAcrossAccountAndUsers` — the money-conservation assertion that would
+  have caught this originally, and the reason it is worth more than the per-case assertions.
+  **Leftover-subsidy follow-up fix, same session:** a second gap in `close()`, per
+  `exercise2-requirements.md`'s "for LMSR only, any leftover subsidy in the event account also
+  returns to the MM." New private `returnLeftoverSubsidyToMarketMaker()`, called after
+  `payWinners()`. **"Leftover," precisely:** `payWinners()` never touches
+  `MarketMakerAccount.balance` (only individual `User` balances), and the payout aggregate was
+  already removed from the account earlier in `close()` — so by this point the account's
+  balance *already is* the leftover; nothing else is pending. It is read once and debited back
+  verbatim, which is also why the account lands at **exactly** `0.0` afterward, not an
+  approximation: `x − x` is always exactly `0.0` in IEEE 754 for a finite `x` that is never
+  recomputed. **Cannot double-count when the MM also trades in their own event, by
+  construction:** `payWinners()`'s per-trade credits (MM's own included, resolved through the
+  same `users.get(buyerUsername)` as any other buyer, no special-casing) and the leftover credit
+  draw from two pools that structurally never overlap — the aggregate payout debit happens once,
+  before either step runs, so nothing either step does afterward can feed back into what the
+  other reads. Tested via `marketMakerWhoIsAlsoAWinningBuyerIsNotDoubleCountedOrShortedByLeftover`,
+  which proves this algebraically (the MM's final balance equals her pre-close balance plus the
+  *entire* pre-close account balance minus only what went to the other winner) rather than by
+  hand-deriving LMSR curve numbers.
+  **This fix broke four of FIX 1's own pre-existing tests**, each for the identical reason:
+  none of them included a market-maker `User` in the map passed to `close()`, so once the
+  leftover started actually being returned, `users.get(event.getMarketMakerUsername())`
+  resolved to `null` (the domain `Event`'s `marketMakerUsername` field defaults to `null` unless
+  `assignMarketMaker()` is explicitly called — `newEvent()`'s test helper never had reason to
+  call it before this fix existed) and the leftover credit was silently skipped, leaving those
+  tests asserting the old, now-incorrect "money stays in the account" behavior. All four were
+  updated, not just patched: `onCloseCommissionIsDeductedFromPayoutAtCloseTime` and
+  `onPurchaseFullPayoutIsDebitedAtCloseWithNoAdditionalCommission` now assert the same residual
+  value lands on the MM's own balance instead of the account; `closeConservesTotalMoneyAcrossAccountAndUsers`
+  gained a market maker to its conservation sum; and `balanceCanGoNegativeAndIsNotClamped` was
+  renamed `marketMakerAbsorbsANegativeLeftoverAndIsNotClamped` — its original point (a balance
+  can legitimately go negative, unclamped) no longer applies to the account, which is now always
+  zeroed by design, but applies to the MM's own balance instead, where an unfavorable leftover
+  now actually lands.
+  **New test file, `engine/test/engine/impl/EngineImplTest.java`** — no `EngineImplTest` existed
+  before this (a gap flagged repeatedly across this session; every `EngineImpl` method-routing
+  guard had only ever been checked by throwaway harnesses). Deliberately **not** a general
+  backfill — its own class comment says so — it holds exactly the two tests that structurally
+  need the real engine rather than `TradeExecutor` in isolation:
+  `fullCycleConservesTotalMoneyAcrossOpenTradeAndClose` (the full `openEvent` →
+  `participateInEvent` → `closeEvent` cycle, through `IEngine`, against the existing
+  `test_files/ex2-small.xml` fixture — conservation holds across the *whole* lifecycle, not just
+  `close()` alone, since `openEvent` also moves money between a `User` and the event account)
+  and `closeEventStillRejectsOrderBookEventsAfterLeftoverFix` (a permanent regression test for
+  the OB-close guard from the Order Book core stage, which had none before). The broader
+  "`EngineImpl` has no test suite" gap stays open and visible, not accidentally masked.
   **Save/Load-State bonus stage:** `saveState()` guards on `events.isEmpty()` (same
   `InvalidCommandStateException` + `NO_FILE_LOADED_MESSAGE` pattern `findEvent()` already uses),
   then delegates the actual serialization to `engine.impl.state.StateFileManager.save()`.
