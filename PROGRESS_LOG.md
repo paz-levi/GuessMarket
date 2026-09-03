@@ -6,6 +6,122 @@ scannable in seconds.
 
 ---
 
+### `f09a990` — 2026-09-03 — Implement Events-list filters (trading method, status, commission mode) end to end, engine + UI (66/66 tests)
+`EventFilterDto`/`IEngine.listEvents(EventFilterDto)` existed since the skeleton stage but the
+engine method still threw `UnsupportedOperationException`, and no UI ever called it. Now real
+end to end. `EngineImpl.listEvents(EventFilterDto)` filters through a new private
+`matchesFilter` (short-circuits on the first non-null dimension that doesn't match), then maps
+through the same `toSummaryDto` the zero-arg overload already uses. That zero-arg overload
+itself is untouched — not just in spirit but literally, byte-for-byte — per its existing
+"stays an unmodified overload" commitment; the small resulting duplication (empty-check +
+stream-and-map) is accepted explicitly, since removing it would mean editing the very method
+required to stay unchanged.
+
+UI: three new filter `ComboBox`es (method/status/commission) above the Events tab's list
+specifically — per ` docs-reference/ui-sketch-layout.md`'s "Filter Line," which sits inside
+the list's own column, not spanning the tab — each defaulting to "All" via `selectFirst()`
+rather than `select(null)` (JavaFX commonly treats `select(null)` as "clear the selection,"
+not "select the null item," which would show blank instead of "All"). Labels reuse the exact
+wording the event list's own rows already show for each field, so the filter never says
+something different from what it's filtering by. `refreshEventsList()` now builds an
+`EventFilterDto` from the three boxes' live selections on every call.
+
+Two things worth recording precisely, not just the outcome: (1) the ComboBox-population/
+listener-attachment order was verified explicitly, on request, before implementation — all
+three `populateFilterComboBox` calls (each ending in `selectFirst()`) complete before any
+`addListener` call, so the initial "All" selection notifies nothing and can't fire
+`refreshEventsList()` before a file is loaded; confirmed both by the ordering argument and,
+after implementation, via a reflection harness through the real FXML-loaded controller
+selecting a real value on a real `ComboBox` and watching the real listener narrow the list.
+(2) One edge case found while wiring, not in the original plan, and resolved with the user
+rather than silently decided either way: the three filter boxes are interactive from app
+startup, before any file loads, unlike every other engine-calling control in this app —
+touching one that early throws `InvalidCommandStateException`, caught as a plain error alert.
+Left as-is (no disable-until-loaded binding) per the user's explicit choice.
+
+### `a827db4` — 2026-09-03 — Implement Order Book peer-to-peer mint per appendix Section 3 (60/60 tests)
+Last piece of Order Book. New `OrderBookExecutor.mintAgainstOppositeOption`, run after ordinary
+same-option matching is exhausted on an incoming `BUY` (never interleaved with it — the two
+consult disjoint books, so a single sequential pass is complete, not just simpler), only when
+`allow-mint="true"`. Walks the *other* option's resting bids best-price-first, minting
+`min(remaining, restingQuantity)` new share-pairs whenever `restingPrice + incomingLimitPrice ≥ d`.
+Unlike ordinary matching this is not a peer-to-peer transfer — both participants are buying
+newly-created shares, so both are debited and the event account is credited the full `d` per
+pair, never a seller credited; both options' `sharesOutstanding` grow by the minted quantity,
+mirroring `openEvent`'s existing initial-allocation code. No commission on mint fills — a
+flagged assumption (the appendix's own reading, and the only choice that doesn't complicate the
+exact-`d`-per-pair invariant the account credit depends on). New `roundToCents` rounds only the
+derived complementary price (`d − restingPrice`, which can land a few ULPs off a clean cent from
+binary subtraction) — resting prices and payment totals are left exactly as computed.
+
+Hand-verified against the appendix's Section 3 worked example (Carol 35 @ `$0.42`, Alice 40 @
+`$0.62` → 35 minted, Carol at `$0.42`, Alice at the complementary `$0.58`, her leftover 5 resting
+at her own `$0.62`) before writing any code, then confirmed via a dedicated test reproducing
+those exact numbers, and separately end to end through the real `IEngine` on
+`test_files/ex2-small.xml` (with a jshell scripting artifact in the first verification pass
+caught and isolated — a mis-evaluated inline chained expression, not an implementation bug —
+before trusting the result). Ten further tests cover exact-fill leftover-free mint,
+below-trigger no-mint, `allow-mint="false"`, ordinary matching consuming before mint is even
+attempted, a `SELL` never triggering mint, multiple resting cross-option bids walked in
+sequence, self-mint (a genuinely different code path from same-option self-trading — crosses
+`OrderBookMarket`'s two books rather than one `OptionBook`'s two sides), a mint pushing a
+participant negative and blocking them afterward, system-wide conservation, and zero commission
+collected even under a nonzero `ON_PURCHASE` rate. 60/60 tests pass (49 → 60).
+
+### `fc72856` — 2026-09-03 — Fix Users tab: show Order Book holdings-based participation (e.g. MM's initial allocation), not just trade history
+Real bug from manual testing: an MM's own initial-allocation shares (credited straight to
+`OptionBook.holdings` by `openEvent`, with no `Trade` ever recorded) were entirely invisible to
+`getUser`'s participation list — `toParticipantDtos` already showed them correctly on the
+Events tab's Participants panel, but the Users tab's list only ever checked trade history via
+`Trade.buyerUsername`. Confirmed to be the identical underlying gap already flagged (not fixed)
+in `ARCHITECTURE.md` from an earlier stage, not a separate one: with no mint yet at the time
+that gap was flagged, a share could only ever originate two ways — MM allocation, or being a
+fill's buyer (which *does* create a `Trade`) — so "holds shares with zero buyer-attributed
+trades" reduced, in practice, to exactly the MM-allocation case.
+
+New `EngineImpl.userParticipatesIn` extracts the existence check as an OR: the original
+trade-history check (unchanged, what still gates LMSR) or, for `ORDER_BOOK`, a nonzero holding
+of either option via `OptionBook.getHolding` — the same source `toParticipantDtos` already used
+correctly. `toParticipationDto` now picks its shares from holdings instead of trade-summed
+totals for Order Book; `tradeHistory`/`totalCommissionPaid` stay trade-sourced either way (real
+data, correct regardless of sourcing model); `optionOneAmountPaid`/`optionTwoAmountPaid` become
+`0.0` for Order Book — a net holding carries no cost-basis information, so `0.0` was chosen over
+fabricating a number, matching the spirit of `profitOrLoss` already being reserved/null there.
+New regression test checks the participation list *before* any trade occurs at all, so it can
+only pass if the entry genuinely came from holdings, not trades.
+
+### `c073f74` — 2026-09-02 — Add Order Book order-submission UI (OrderBookPanelBuilder); fix OB tradingMethod mislabeled as LMSR in Users tab, add self-trade conservation test, hide LMSR-only price for OB events
+The Order Book stage's UI half: `buildActiveControls` now routes `ORDER_BOOK` events to a new
+`OrderBookPanelBuilder` (plain static-method helper class, per CLAUDE.md's `<fx:include>`-
+deferral decision) instead of the LMSR participate form — two option-book panels side by side
+(LAST/BID/ASK/MID/SPREAD, resting bids/asks), participants below, an order submission form
+below that, no Close form (still guarded server-side). Six `MainViewController` members
+(`engine`, both list-refresh methods, both `showErrorAlert` overloads, `buildUsernameComboBox`,
+`formatMoney`) widened `private` → package-private so the new class can reuse them.
+
+Three real bugs surfaced by manual testing against the running GUI, all fixed here:
+1. **`EngineImpl.toParticipationDto` hardcoded `TradingMethod.LMSR`** — the same category of
+   bug already fixed once in `toStatusDto`/`toSummaryDto`, but a separate, previously-missed
+   occurrence. An Order Book event's row on the Users tab read "— LMSR" regardless of its real
+   method. Now reads `event.getTradingMethod()`; new regression test in `EngineImplTest`.
+2. **Self-trading, previously an untested assumption, now verified** — a user's own order
+   matching their own resting order resolves `buyer`/`seller` to the identical `User` object in
+   `OrderBookExecutor.executeFill`. New `OrderBookExecutorTest` case proves (not just trusts
+   from object identity) that holdings net back to the starting position and, under
+   `ON_PURCHASE`, the only real balance effect is losing the commission to the MM account.
+3. **`appendEventStatusDisplay` mixed a real Order Book number with a meaningless one** — an
+   Order Book event's `optionOnePrice`/`optionTwoPrice` are always `0.0` (no LMSR curve
+   exists), so the panel used to show a misleading `price 0.00`. First pass hid the whole
+   four-line block (price/shares/MM-balance/commission); course-corrected once the same
+   session — shares outstanding, MM balance, and commission collected are all still real and
+   otherwise undisplayed for Order Book, so only the LMSR-specific "price" fragment is hidden
+   now (new `formatOptionLine` helper), not the whole line or the account figures.
+
+Both the panel construction and the display fix were verified against the actual rendered
+scene graph via a reflection-based harness, not just by reading the source or trusting a clean
+compile — walking the real `VBox` tree for both an LMSR and an Order Book event loaded from
+`test_files/ex2-small.xml`. 48/48 tests pass (46 → 48, the two new regression tests above).
+
 ### `3ea7430` — 2026-09-02 — docs: record Order Book close architecture note (holdings-based payout, not trade-history replay)
 `CLAUDE.md` reference-file list updated to reflect files that now actually exist
 (`order-book-appendix.md`, `xml-schema-appendix-ex2.md`, `ui-sketch-layout.md`,
