@@ -80,10 +80,91 @@ public final class OrderBookExecutor {
             book.setLastTradePrice(fillPrice);
         }
 
+        // Peer-to-peer mint: only for a BUY with quantity still unfilled after ordinary matching, and only when
+        // the event allows it. Runs strictly after ordinary matching, never interleaved with it -- the two consult
+        // disjoint books (same-option opposite side vs. cross-option same side), and neither can add liquidity the
+        // other would need to re-check, so a single sequential pass is not just simpler, it's complete.
+        if (remaining > 0 && side == OrderSide.BUY && market.isAllowMint()) {
+            remaining = mintAgainstOppositeOption(event, market, book, optionNumber, trader, price, remaining, users, fills);
+        }
+
         if (remaining > 0) {
             book.rest(new Order(trader.getName(), side, price, remaining, market.nextSequence()));
         }
         return fills;
+    }
+
+    // Matches the incoming BUY order against the OTHER option's resting bids (best price first), creating
+    // brand-new share-pairs whenever a resting bid's price plus the incoming order's own limit price together
+    // reach at least d. The resting side fills at its own unchanged price; the incoming side fills at the
+    // complementary price (d - restingPrice) -- always <= its own limit, by construction of the trigger check.
+    // Unlike ordinary matching this is not a peer-to-peer transfer: both participants are buying newly-created
+    // shares, so both are debited and the event account is credited the full d per pair, never a seller credited.
+    // Returns whatever quantity is still unfilled after mint (0 if fully satisfied).
+    private static double mintAgainstOppositeOption(Event event, OrderBookMarket market, OptionBook book,
+                                                      int optionNumber, User trader, double incomingLimitPrice,
+                                                      double remaining, Map<String, User> users, List<Trade> fills) {
+        int otherOptionNumber = optionNumber == 1 ? 2 : 1;
+        OptionBook otherBook = market.getBook(otherOptionNumber);
+        EventOption thisOption = event.getOption(optionNumber);
+        EventOption otherOption = event.getOption(otherOptionNumber);
+        List<Order> otherBids = otherBook.getBids();
+
+        while (remaining > 0 && !otherBids.isEmpty()) {
+            Order restingBid = otherBids.get(0);
+            double restingPrice = restingBid.getPrice();
+            if (restingPrice + incomingLimitPrice < market.getD()) {
+                break; // best (highest) price first -- if this one can't reach d, none of the lower ones can either
+            }
+            double mintQuantity = Math.min(remaining, restingBid.getQuantity());
+            double complementaryPrice = roundToCents(market.getD() - restingPrice);
+
+            // A genuine new pair: both options' outstanding count grows, unlike ordinary matching's transfer of
+            // already-existing shares.
+            thisOption.addShares(mintQuantity);
+            otherOption.addShares(mintQuantity);
+
+            User restingUser = users.get(restingBid.getUsername());
+            double restingPayment = mintQuantity * restingPrice;
+            double incomingPayment = mintQuantity * complementaryPrice;
+            // No commission on a mint -- flagged assumption, see CLAUDE.md Section 8: it isn't a trade between two
+            // existing parties, and charging commission on top (or carving it out of d) would break the exact
+            // "both payments sum to d" invariant the account credit below relies on.
+            restingUser.debit(restingPayment);
+            trader.debit(incomingPayment);
+            event.getMarketMakerAccount().credit(restingPayment + incomingPayment); // == mintQuantity * d, exactly
+
+            otherBook.addHolding(restingUser.getName(), mintQuantity);
+            book.addHolding(trader.getName(), mintQuantity);
+
+            // Two Trade records, one per option/price -- a mint has no single buyer/seller pair the way an
+            // ordinary fill does. Only the incoming trader's own goes into fills (OrderResultDto is scoped to one
+            // option); the resting side's is still recorded on the event so it reaches their own trade history.
+            LocalDateTime now = LocalDateTime.now();
+            Trade restingTrade = new Trade(otherOption, mintQuantity, restingPrice, 0.0, restingPayment, now, restingUser.getName());
+            Trade incomingTrade = new Trade(thisOption, mintQuantity, complementaryPrice, 0.0, incomingPayment, now, trader.getName());
+            event.addTrade(restingTrade);
+            event.addTrade(incomingTrade);
+            fills.add(incomingTrade);
+
+            otherBook.setLastTradePrice(restingPrice);
+            book.setLastTradePrice(complementaryPrice);
+
+            restingBid.reduceQuantity(mintQuantity);
+            if (restingBid.getQuantity() <= 0) {
+                otherBook.remove(restingBid);
+            }
+            remaining -= mintQuantity;
+        }
+        return remaining;
+    }
+
+    // d - restingPrice can land a few ULPs off a clean cent (e.g. 0.5800000000000001) purely from binary
+    // subtraction, unrelated to either party's actual intent -- flagged in this file's core-stage history as
+    // something to fix once mint existed. Only the derived complementary price is rounded; resting prices and
+    // payment totals are left alone, same as everywhere else in this codebase.
+    private static double roundToCents(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     // Whether a resting order's price is acceptable to an incoming order: a buy will pay up to its limit, a sell will

@@ -284,18 +284,246 @@ class OrderBookExecutorTest {
         assertEquals(commission, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
     }
 
+    // The appendix's Section 3 worked example, reproduced fill-by-fill: Carol's resting NO bid (35 @ $0.42) plus
+    // Alice's incoming YES bid (40 @ $0.62) together reach d=1, minting 35 new pairs. Carol fills at her own
+    // resting price; Alice fills at the complementary price (d - 0.42 = 0.58), never her own $0.62 limit; her
+    // leftover 5 shares rest as a new YES bid at that limit.
+    @Test
+    void mintReproducesAppendixWorkedExample() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.restBid("Carol", 2, 35, 0.42);
+
+        List<Trade> fills = fixture.submit("Alice", 1, OrderSide.BUY, 40, 0.62);
+
+        assertEquals(1, fills.size());
+        Trade aliceTrade = fills.get(0);
+        assertEquals(35, aliceTrade.getQuantity(), DELTA);
+        assertEquals(0.58, aliceTrade.getPricePerShare(), DELTA);
+        assertEquals("Alice", aliceTrade.getBuyerUsername());
+
+        assertEquals(START_BALANCE - 35 * 0.58, fixture.balanceOf("Alice"), DELTA);
+        assertEquals(START_BALANCE - 35 * 0.42, fixture.balanceOf("Carol"), DELTA);
+        assertEquals(35 * D, fixture.event.getMarketMakerAccount().getBalance(), DELTA); // 35 * d exactly
+
+        assertEquals(35, fixture.event.getOptionOne().getSharesOutstanding(), DELTA);
+        assertEquals(35, fixture.event.getOptionTwo().getSharesOutstanding(), DELTA);
+        assertEquals(35, fixture.book(1).getHolding("Alice"), DELTA);
+        assertEquals(35, fixture.book(2).getHolding("Carol"), DELTA);
+
+        assertTrue(fixture.book(2).getBids().isEmpty()); // Carol's fully consumed and removed
+        assertEquals(1, fixture.book(1).getBids().size()); // Alice's leftover rests
+        assertEquals(5, fixture.book(1).getBids().get(0).getQuantity(), DELTA);
+        assertEquals(0.62, fixture.book(1).getBids().get(0).getPrice(), DELTA); // her own limit, not the complement
+
+        assertEquals(0.42, fixture.book(2).getLastTradePrice(), DELTA);
+        assertEquals(0.58, fixture.book(1).getLastTradePrice(), DELTA);
+    }
+
+    // A mint that exactly satisfies the incoming order leaves nothing resting on either side.
+    @Test
+    void mintExactlySatisfiesIncomingOrderLeavesNothingResting() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.restBid("Carol", 2, 40, 0.42);
+
+        fixture.submit("Alice", 1, OrderSide.BUY, 40, 0.62);
+
+        assertTrue(fixture.book(1).getBids().isEmpty());
+        assertTrue(fixture.book(2).getBids().isEmpty());
+        assertEquals(40, fixture.book(1).getHolding("Alice"), DELTA);
+        assertEquals(40, fixture.book(2).getHolding("Carol"), DELTA);
+    }
+
+    // Below the trigger (resting + incoming limit < d): no mint happens, the incoming order simply rests in full.
+    @Test
+    void doesNotMintWhenCombinedPriceIsBelowD() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.restBid("Carol", 2, 20, 0.30);
+
+        List<Trade> fills = fixture.submit("Alice", 1, OrderSide.BUY, 20, 0.60); // 0.30 + 0.60 = 0.90 < 1
+
+        assertTrue(fills.isEmpty());
+        assertEquals(20, fixture.book(1).getBids().get(0).getQuantity(), DELTA);
+        assertEquals(1, fixture.book(2).getBids().size()); // Carol's untouched
+        assertEquals(0, fixture.book(1).getHolding("Alice"), DELTA);
+        assertEquals(0, fixture.event.getOptionOne().getSharesOutstanding(), DELTA);
+    }
+
+    // allow-mint="false" refuses to mint even when the combined price would otherwise qualify.
+    @Test
+    void doesNotMintWhenAllowMintIsFalseEvenIfPriceQualifies() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, false);
+        fixture.restBid("Carol", 2, 35, 0.42);
+
+        List<Trade> fills = fixture.submit("Alice", 1, OrderSide.BUY, 40, 0.62); // would mint if allowed
+
+        assertTrue(fills.isEmpty());
+        assertEquals(40, fixture.book(1).getBids().get(0).getQuantity(), DELTA); // rests in full, untouched
+        assertEquals(1, fixture.book(2).getBids().size());
+        assertEquals(0, fixture.event.getOptionOne().getSharesOutstanding(), DELTA);
+    }
+
+    // Ordinary same-option matching is checked and exhausted BEFORE mint is even attempted: a same-option ask and
+    // a qualifying cross-option bid are both available, and the ordinary fill happens first, with only the
+    // leftover reaching the mint step.
+    @Test
+    void ordinaryMatchingConsumesBeforeMintIsEvenChecked() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.giveShares("Bob", 1, 10);
+        fixture.restAsk("Bob", 1, 10, 0.50); // ordinary same-option liquidity
+        fixture.restBid("Carol", 2, 30, 0.42); // cross-option mint liquidity
+
+        List<Trade> fills = fixture.submit("Alice", 1, OrderSide.BUY, 40, 0.62);
+
+        assertEquals(2, fills.size());
+        assertEquals(10, fills.get(0).getQuantity(), DELTA);
+        assertEquals(0.50, fills.get(0).getPricePerShare(), DELTA); // ordinary fill, Bob's own price
+        assertEquals(30, fills.get(1).getQuantity(), DELTA);
+        assertEquals(0.58, fills.get(1).getPricePerShare(), DELTA); // mint fill, complementary price
+
+        assertEquals(40, fixture.book(1).getHolding("Alice"), DELTA); // 10 ordinary + 30 minted
+        assertEquals(0, fixture.book(1).getHolding("Bob"), DELTA); // sold his 10 away
+        assertEquals(30, fixture.book(2).getHolding("Carol"), DELTA);
+        assertTrue(fixture.book(1).getBids().isEmpty()); // fully filled across both phases, nothing rests
+    }
+
+    // A SELL never triggers mint, even when qualifying cross-option BID liquidity exists -- mint is gated on the
+    // incoming side being BUY, checked before the cross-option book is ever consulted.
+    @Test
+    void sellNeverTriggersMintEvenWithQualifyingCrossOptionBidLiquidity() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.giveShares("Bob", 1, 20);
+        fixture.restBid("Carol", 2, 30, 0.60); // would easily qualify if this were treated as a BUY
+
+        List<Trade> fills = fixture.submit("Bob", 1, OrderSide.SELL, 20, 0.55);
+
+        assertTrue(fills.isEmpty()); // no YES asks to match against, and mint is never even checked for a SELL
+        assertEquals(1, fixture.book(1).getAsks().size());
+        assertEquals(20, fixture.book(1).getAsks().get(0).getQuantity(), DELTA);
+        assertEquals(1, fixture.book(2).getBids().size()); // Carol's untouched
+        assertEquals(0, fixture.event.getOptionOne().getSharesOutstanding(), DELTA);
+        assertEquals(0, fixture.event.getOptionTwo().getSharesOutstanding(), DELTA);
+    }
+
+    // Mint walks multiple resting cross-option bids in sequence, best (highest) price first -- extends past the
+    // appendix's own single-resting-order example.
+    @Test
+    void mintWalksMultipleRestingCrossOptionBidsBestPriceFirst() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.restBid("Bob", 2, 20, 0.55);
+        fixture.restBid("Carol", 2, 15, 0.42);
+
+        List<Trade> fills = fixture.submit("Alice", 1, OrderSide.BUY, 30, 0.60);
+
+        assertEquals(2, fills.size());
+        assertEquals(20, fills.get(0).getQuantity(), DELTA);
+        assertEquals(0.45, fills.get(0).getPricePerShare(), DELTA); // d - 0.55, Bob's price first (better)
+        assertEquals(10, fills.get(1).getQuantity(), DELTA);
+        assertEquals(0.58, fills.get(1).getPricePerShare(), DELTA); // d - 0.42, Carol's price second
+
+        assertEquals(30, fixture.book(1).getHolding("Alice"), DELTA);
+        assertEquals(20, fixture.book(2).getHolding("Bob"), DELTA);
+        assertEquals(10, fixture.book(2).getHolding("Carol"), DELTA);
+
+        assertTrue(fixture.book(1).getBids().isEmpty()); // Alice fully filled (20 + 10 = 30)
+        assertEquals(1, fixture.book(2).getBids().size()); // Carol's remainder still resting
+        assertEquals(5, fixture.book(2).getBids().get(0).getQuantity(), DELTA);
+        assertEquals(0.42, fixture.book(2).getBids().get(0).getPrice(), DELTA);
+    }
+
+    // Self-mint: the same user has both the resting cross-option bid and the incoming order. A genuinely different
+    // code path from same-option self-trading (crosses OrderBookMarket's two books, not one OptionBook's two
+    // sides), so it gets its own verification rather than inherited confidence from that earlier test.
+    @Test
+    void selfMintNetsSharesAndMoneyCorrectlyForTheSameUser() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.restBid("Zoe", 2, 20, 0.40); // Zoe's own resting NO bid
+
+        List<Trade> fills = fixture.submit("Zoe", 1, OrderSide.BUY, 20, 0.65); // her own incoming YES bid
+
+        assertEquals(1, fills.size());
+        assertEquals(20, fills.get(0).getQuantity(), DELTA);
+        assertEquals(0.60, fills.get(0).getPricePerShare(), DELTA); // d - 0.40
+
+        // Two separate debits on the SAME object: her resting NO payment (20*0.40=8.00) and her incoming YES
+        // payment (20*0.60=12.00) -- together exactly d*quantity=20.00, same as if two different people had paid it.
+        assertEquals(START_BALANCE - 8.00 - 12.00, fixture.balanceOf("Zoe"), DELTA);
+        assertEquals(20 * D, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+
+        // Unlike same-option self-trading (which nets holdings back to nothing), she now holds real shares of
+        // BOTH options from this one mint: 20 NO (resting side) and 20 YES (incoming side).
+        assertEquals(20, fixture.book(1).getHolding("Zoe"), DELTA);
+        assertEquals(20, fixture.book(2).getHolding("Zoe"), DELTA);
+        assertTrue(fixture.book(2).getBids().isEmpty()); // her resting order fully consumed
+    }
+
+    // A mint that pushes a participant negative still completes; they're blocked from that point on -- same
+    // interpretation already established for ordinary fills, now verified for mint's two-sided debit too.
+    @Test
+    void mintMayPushAParticipantNegativeAndThatBlocksThemAfterward() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.users.put("Broke", new User("Broke", 1.0));
+        fixture.restBid("Carol", 2, 20, 0.42);
+
+        fixture.submit("Broke", 1, OrderSide.BUY, 20, 0.62);
+
+        assertEquals(1.0 - 20 * 0.58, fixture.balanceOf("Broke"), DELTA);
+        assertTrue(fixture.users.get("Broke").isBlocked());
+    }
+
+    // System-level conservation, with a genuine leftover (not an exact match, unlike the appendix trace above):
+    // total money across both participants and the event account is unchanged by the mint, and both options'
+    // sharesOutstanding grow by exactly the minted quantity, no more and no less.
+    @Test
+    void mintConservesTotalMoneyAndGrowsBothOptionsSharesOutstandingByExactlyTheMintedQuantity() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_PURCHASE, true);
+        fixture.restBid("Carol", 2, 50, 0.30);
+        double totalBefore = fixture.balanceOf("Alice") + fixture.balanceOf("Carol")
+                + fixture.event.getMarketMakerAccount().getBalance();
+
+        fixture.submit("Alice", 1, OrderSide.BUY, 20, 0.75); // 0.30 + 0.75 = 1.05 >= 1; Carol has more than enough
+
+        double totalAfter = fixture.balanceOf("Alice") + fixture.balanceOf("Carol")
+                + fixture.event.getMarketMakerAccount().getBalance();
+        assertEquals(totalBefore, totalAfter, DELTA);
+
+        assertEquals(20, fixture.event.getOptionOne().getSharesOutstanding(), DELTA);
+        assertEquals(20, fixture.event.getOptionTwo().getSharesOutstanding(), DELTA);
+        assertEquals(30, fixture.book(2).getBids().get(0).getQuantity(), DELTA); // Carol's 50-20 remainder rests
+    }
+
+    // No commission is collected on a mint fill even under a nonzero ON_PURCHASE rate -- the account still
+    // receives exactly d per pair, nothing skimmed on top and nothing carved out.
+    @Test
+    void mintCollectsNoCommissionEvenUnderOnPurchaseMode() {
+        Fixture fixture = new Fixture(25, CommissionMode.ON_PURCHASE, true); // 25%: would clearly show up if applied
+        fixture.restBid("Carol", 2, 35, 0.42);
+
+        List<Trade> fills = fixture.submit("Alice", 1, OrderSide.BUY, 35, 0.62);
+
+        assertEquals(0.0, fills.get(0).getCommissionPaid(), DELTA);
+        assertEquals(0.0, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+        assertEquals(35 * D, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+    }
+
     // Small harness: one Order Book event, three funded users, and helpers to seed books and holdings directly.
     private static final class Fixture {
         private final Event event;
         private final Map<String, User> users = new LinkedHashMap<>();
 
         Fixture(int commissionRate, CommissionMode commissionMode) {
-            OrderBookMarket market = new OrderBookMarket(0, D, false);
+            this(commissionRate, commissionMode, false);
+        }
+
+        // allowMint defaults to false above for every pre-mint-stage test; mint tests opt in explicitly.
+        Fixture(int commissionRate, CommissionMode commissionMode, boolean allowMint) {
+            OrderBookMarket market = new OrderBookMarket(0, D, allowMint);
             event = new Event(1, "Test OB Event", "An order book event",
                     new EventOption("Yes"), new EventOption("No"),
                     commissionRate, commissionMode, 0, new MarketMakerAccount(0.0),
                     EventStatus.ACTIVE, TradingMethod.ORDER_BOOK, market);
-            for (String name : List.of("Zoe", "Bob", "Carol")) {
+            // Alice added for the mint tests, matching the appendix's own naming (Carol/Alice) so a reader can
+            // check a test straight against the worked example without a name-mapping step.
+            for (String name : List.of("Zoe", "Bob", "Carol", "Alice")) {
                 users.put(name, new User(name, START_BALANCE));
             }
         }

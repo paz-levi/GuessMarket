@@ -835,6 +835,42 @@ prices from whatever counterparties are actually resting. All three classes are 
     trader's starting position (a `+quantity` and `-quantity` on the same username cancel), and
     under `ON_PURCHASE` the only real balance effect is losing the commission to the MM account
     — she pays herself the share value and gets it back, but still pays commission on it.
+  - **Mint stage: peer-to-peer share creation, new `mintAgainstOppositeOption`.** Runs after
+    ordinary same-option matching is exhausted on the incoming order (never interleaved — the
+    two consult disjoint books, and neither can add liquidity the other would need to
+    re-check), only for a `BUY` with quantity still unfilled and `allow-mint="true"`. Reads the
+    **other** option's resting bids, best price first; mints `min(remaining, restingQuantity)`
+    pairs whenever `restingPrice + incomingLimitPrice ≥ d`. **Unlike ordinary matching, this is
+    not a peer-to-peer transfer — there are two buyers and no seller.** Both are debited (the
+    resting side at its own unchanged price, the incoming side at the complementary price,
+    `d − restingPrice`, never its own limit), and the event account is credited the *sum* of
+    both, which is exactly `quantity × d` by construction. Both options' `EventOption.sharesOutstanding`
+    grow by the minted quantity — a genuine new pair, mirroring `openEvent`'s existing
+    initial-allocation code exactly, not a transfer of existing shares.
+    **No commission on a mint fill** — flagged assumption, see `CLAUDE.md` Section 8 item 9;
+    the only choice that doesn't complicate the exact-`d`-per-pair invariant the account credit
+    depends on. A mint produces **two** `Trade` records (one per option, at its own price) —
+    only the incoming trader's own is appended to the `fills` list `submit()` returns
+    (`OrderResultDto` is scoped to one option; folding both in would corrupt
+    `EngineImpl.toOrderResultDto`'s aggregation), but the resting counterparty's is still
+    recorded via `event.addTrade(...)`, so it reaches their own trade history and — through the
+    existing, unmodified `toParticipationDto` scan — their own participation view too, with no
+    changes needed there. New `roundToCents` rounds only the derived complementary price
+    (`d − restingPrice`, which can land a few ULPs off a clean cent from binary subtraction,
+    e.g. `0.5800000000000001` for `1 − 0.42`) — resting prices and payment totals are left
+    exactly as computed, matching how the rest of this codebase already treats money.
+    Hand-verified against the appendix's Section 3 worked example (Carol 35 @ `$0.42`, Alice
+    40 @ `$0.62` → 35 minted, Carol at `$0.42`, Alice at the complementary `$0.58`, her leftover
+    5 resting at her own `$0.62`) before writing any code, then confirmed via
+    `mintReproducesAppendixWorkedExample` and, separately, end to end through the real
+    `IEngine` on `test_files/ex2-small.xml`. Ten further tests cover: exact-fill leftover-free
+    mint, below-trigger no-mint, `allow-mint="false"`, ordinary matching consuming before mint
+    is even attempted, a `SELL` never triggering mint, multiple resting cross-option bids
+    walked in sequence, self-mint (a genuinely different code path from same-option
+    self-trading — crosses `OrderBookMarket`'s two books rather than one `OptionBook`'s two
+    sides, so it gets its own dedicated test), a mint pushing a participant negative and
+    blocking them afterward, system-wide conservation, and zero commission collected even
+    under a nonzero `ON_PURCHASE` rate.
 
 ### `engine.impl.state` package
 
