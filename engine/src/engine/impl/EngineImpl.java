@@ -34,6 +34,7 @@ import engine.domain.User;
 import engine.domain.lmsr.LmsrMath;
 import engine.domain.orderbook.OptionBook;
 import engine.domain.orderbook.Order;
+import engine.domain.orderbook.OrderBookMarket;
 import engine.impl.state.LoadedState;
 import engine.impl.state.StateFileManager;
 import engine.impl.trading.OrderBookExecutor;
@@ -344,30 +345,56 @@ public class EngineImpl implements IEngine {
     }
 
     // Builds the full "user detail" DTO from a domain User: balance, blocked state, and one participation entry per
-    // currently-loaded event the user has at least one trade attributed to (not filtered to ACTIVE -- a CLOSED event the
+    // currently-loaded event the user has a stake in worth showing (not filtered to ACTIVE -- a CLOSED event the
     // user participated in still belongs here, per exercise2-requirements.md's own worked description of a closed entry).
     private static UserDetailDto toUserDetailDto(User user, Collection<Event> allEvents) {
         List<UserEventParticipationDto> participations = new ArrayList<>();
         for (Event event : allEvents) {
-            boolean participated = event.getTradeHistory().stream()
-                    .anyMatch(trade -> user.getName().equals(trade.getBuyerUsername()));
-            if (participated) {
+            if (userParticipatesIn(event, user.getName())) {
                 participations.add(toParticipationDto(event, user.getName()));
             }
         }
         return new UserDetailDto(user.getName(), user.getBalance(), user.isBlocked(), participations);
     }
 
-    // Builds one event's participation entry for username: their own trade history (newest-first), per-option shares
-    // held/amount paid (summed from their own trades only -- LMSR shares aren't transferable, so "held" is "bought"),
-    // total commission paid, and the winning option if closed. profitOrLoss stays null -- reserved for Order Book.
+    // Whether username has a stake in event worth showing: an LMSR buy (trade-history-based -- shares aren't
+    // transferable there, so a trade IS the position) or, for Order Book, a nonzero holding of either option
+    // (holdings-based, since a share there can be acquired without ever appearing as a Trade -- the MM's own
+    // initial allocation at open is the clearest example, and the bug this check exists to fix: an MM who never
+    // personally traded still legitimately holds shares, and toParticipantDtos already shows them correctly on
+    // the Events tab's Participants panel while this trade-only check missed them entirely on the Users tab).
+    private static boolean userParticipatesIn(Event event, String username) {
+        boolean hasTradeHistory = event.getTradeHistory().stream()
+                .anyMatch(trade -> username.equals(trade.getBuyerUsername()));
+        if (hasTradeHistory) {
+            return true;
+        }
+        if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
+            OrderBookMarket orderBook = event.getOrderBook();
+            // Same exact-equality convention toParticipantDtos already uses for "did they fully exit" -- not a new
+            // risk introduced here, just applied consistently.
+            return orderBook.getBookOne().getHolding(username) != 0
+                    || orderBook.getBookTwo().getHolding(username) != 0;
+        }
+        return false;
+    }
+
+    // Builds one event's participation entry for username: their own trade history (newest-first) and total
+    // commission paid always come from their own trades -- that data is real and correct regardless of trading
+    // method, since a user's actual fills genuinely happened and genuinely cost commission. Per-option shares
+    // held/amount paid differ by method: LMSR sums them from the user's own trades (shares aren't transferable
+    // there, so "held" is simply "bought"); Order Book takes shares from OptionBook.holdings instead -- the same
+    // holdings-based source toParticipantDtos already uses correctly -- since a share there can be acquired
+    // without any Trade (the MM's initial allocation, most notably). amountPaid has no holdings-based analog (a
+    // net holding carries no cost-basis information) and is 0.0 for Order Book, the same spirit as profitOrLoss
+    // already being reserved/null there.
     private static UserEventParticipationDto toParticipationDto(Event event, String username) {
         List<Trade> allTrades = event.getTradeHistory();
         List<TradeRecordDto> userTradeHistory = new ArrayList<>();
-        double optionOneShares = 0;
-        double optionTwoShares = 0;
-        double optionOneAmountPaid = 0;
-        double optionTwoAmountPaid = 0;
+        double optionOneSharesFromTrades = 0;
+        double optionTwoSharesFromTrades = 0;
+        double optionOneAmountPaidFromTrades = 0;
+        double optionTwoAmountPaidFromTrades = 0;
         double totalCommissionPaid = 0;
         for (int i = allTrades.size() - 1; i >= 0; i--) {
             Trade trade = allTrades.get(i);
@@ -376,14 +403,25 @@ public class EngineImpl implements IEngine {
             }
             userTradeHistory.add(toTradeRecordDto(trade));
             if (trade.getOption() == event.getOptionOne()) {
-                optionOneShares += trade.getQuantity();
-                optionOneAmountPaid += trade.getTotalPaid();
+                optionOneSharesFromTrades += trade.getQuantity();
+                optionOneAmountPaidFromTrades += trade.getTotalPaid();
             } else {
-                optionTwoShares += trade.getQuantity();
-                optionTwoAmountPaid += trade.getTotalPaid();
+                optionTwoSharesFromTrades += trade.getQuantity();
+                optionTwoAmountPaidFromTrades += trade.getTotalPaid();
             }
             totalCommissionPaid += trade.getCommissionPaid();
         }
+
+        boolean isOrderBook = event.getTradingMethod() == TradingMethod.ORDER_BOOK;
+        double optionOneShares = isOrderBook
+                ? event.getOrderBook().getBookOne().getHolding(username)
+                : optionOneSharesFromTrades;
+        double optionTwoShares = isOrderBook
+                ? event.getOrderBook().getBookTwo().getHolding(username)
+                : optionTwoSharesFromTrades;
+        double optionOneAmountPaid = isOrderBook ? 0.0 : optionOneAmountPaidFromTrades;
+        double optionTwoAmountPaid = isOrderBook ? 0.0 : optionTwoAmountPaidFromTrades;
+
         EventOption winningOption = event.getWinningOption();
         return new UserEventParticipationDto(event.getId(), event.getName(), event.getTradingMethod(), event.getStatus(),
                 userTradeHistory, optionOneShares, optionTwoShares, optionOneAmountPaid, optionTwoAmountPaid,

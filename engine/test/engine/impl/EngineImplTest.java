@@ -2,6 +2,7 @@ package engine.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
@@ -18,9 +19,9 @@ import exception.IllegalTradeException;
 
 // Deliberately NOT a full EngineImpl test suite -- that gap (flagged repeatedly through this session; every
 // method-routing guard so far has only ever been checked by throwaway harnesses) stays open. This file exists for
-// exactly two tests that structurally require the real engine end to end, not just TradeExecutor in isolation:
-// full-cycle money conservation (open -> trade -> close, through IEngine, not just close() alone) and the
-// closeEvent-refuses-Order-Book guard, which had no permanent test anywhere before this.
+// tests that structurally require the real engine end to end, not just TradeExecutor in isolation: full-cycle
+// money conservation (open -> trade -> close, through IEngine, not just close() alone), the closeEvent-refuses-
+// Order-Book guard, and getUser's participation-list correctness across both trading methods.
 class EngineImplTest {
 
     private static final double DELTA = 1e-9;
@@ -82,6 +83,30 @@ class EngineImplTest {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Expected Menash to have a participation entry for event 2"));
         assertEquals(TradingMethod.ORDER_BOOK, participation.tradingMethod());
+    }
+
+    // Regression: an MM's initial-allocation shares (credited straight to OptionBook.holdings by openEvent, with no
+    // Trade ever recorded) used to be entirely invisible to getUser's participation list -- toParticipantDtos
+    // already showed them correctly on the Events tab's Participants panel, but the Users tab's list only ever
+    // checked trade history. Reproduces the exact reported scenario: check the list BEFORE any trade occurs at all,
+    // proving the entry comes from holdings, not trades.
+    @Test
+    void getUserShowsInitialAllocationAsParticipationEvenWithNoTradesYet() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(FIXTURE_FILE);
+        engine.openEvent(2, "Avrum"); // Order Book; Avrum gets initial-allocation shares, no trade recorded
+
+        UserEventParticipationDto participation = engine.getUser("Avrum").activeParticipations().stream()
+                .filter(p -> p.eventId() == 2)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected Avrum to have a participation entry for event 2"));
+
+        assertEquals(TradingMethod.ORDER_BOOK, participation.tradingMethod());
+        assertEquals(100.0, participation.optionOneSharesHeld(), DELTA); // initial=100, d=1 -> 100 pairs
+        assertEquals(100.0, participation.optionTwoSharesHeld(), DELTA);
+        assertEquals(0.0, participation.optionOneAmountPaid(), DELTA); // no holdings-based cost-basis concept
+        assertEquals(0.0, participation.optionTwoAmountPaid(), DELTA);
+        assertTrue(participation.tradeHistory().isEmpty());
     }
 
     // Sums every currently loaded user's balance plus one event's own account balance -- the full pool of money

@@ -285,6 +285,25 @@ flowchart TD
   own stage, not a quiet addition here: fixing it properly means deciding how
   `optionOneSharesHeld`/`optionOneAmountPaid` etc. should even be computed for Order Book (net
   holdings vs. amount paid via trades only), not just widening one `anyMatch` check.
+  **Resolved, next stage — reported via manual testing as a distinct symptom (an MM's own
+  initial-allocation shares invisible on their Users-tab participation list), confirmed to be
+  the identical underlying gap flagged just above, not a separate one:** no mint exists yet, so
+  a share can only ever originate two ways — the MM's initial allocation, or being the buyer in
+  a fill (which *does* create a `Trade`) — so "holds shares with zero buyer-attributed trades"
+  reduces, in practice, to exactly the MM-allocation case. New `userParticipatesIn(Event,
+  String)` extracts the existence check as an OR: the original trade-history check (unchanged,
+  what still gates LMSR) **or**, for `ORDER_BOOK`, a nonzero holding of either option via
+  `OptionBook.getHolding` — the same source `toParticipantDtos` already used correctly.
+  `toParticipationDto` picks its shares from holdings instead of the trade-summed totals for
+  Order Book; `tradeHistory`/`totalCommissionPaid` stay trade-sourced either way (real data,
+  correct regardless of sourcing model); `optionOneAmountPaid`/`optionTwoAmountPaid` become
+  `0.0` for Order Book — decided explicitly, not assumed: a net holding carries no cost-basis
+  information (the initial allocation was never "paid for" via a priced trade), so fabricating
+  a number there would be worse than a documented `0.0`, matching the spirit of `profitOrLoss`
+  already being reserved/null for Order Book. Regression test:
+  `EngineImplTest.getUserShowsInitialAllocationAsParticipationEvenWithNoTradesYet`, which
+  checks the participation list *before* any trade occurs at all, so it can only pass if the
+  entry genuinely came from holdings.
   **Order Book core stage:** `submitOrder` is real (returns `OrderResultDto`), and three
   existing methods gained branches:
   - `openEvent` computes one `openingCost` variable by method — `initial` for Order Book,
