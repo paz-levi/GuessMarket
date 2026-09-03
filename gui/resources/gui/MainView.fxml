@@ -11,6 +11,7 @@
 <?import javafx.scene.control.Tab?>
 <?import javafx.scene.control.TabPane?>
 <?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.FlowPane?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 
@@ -33,17 +34,23 @@
             <Tab text="Events">
                 <SplitPane dividerPositions="0.48">
                     <VBox spacing="6">
-                        <HBox fx:id="eventFilterBar" spacing="10" styleClass="header-bar">
+                        <FlowPane fx:id="eventFilterBar" hgap="16" vgap="6" styleClass="header-bar">
                             <padding>
                                 <Insets top="8" right="8" bottom="8" left="8" />
                             </padding>
-                            <Label text="Method:" />
-                            <ComboBox fx:id="methodFilterComboBox" />
-                            <Label text="Status:" />
-                            <ComboBox fx:id="statusFilterComboBox" />
-                            <Label text="Commission:" />
-                            <ComboBox fx:id="commissionFilterComboBox" />
-                        </HBox>
+                            <HBox spacing="6" alignment="CENTER_LEFT">
+                                <Label text="Method:" />
+                                <ComboBox fx:id="methodFilterComboBox" prefWidth="130" minWidth="70" />
+                            </HBox>
+                            <HBox spacing="6" alignment="CENTER_LEFT">
+                                <Label text="Status:" />
+                                <ComboBox fx:id="statusFilterComboBox" prefWidth="130" minWidth="70" />
+                            </HBox>
+                            <HBox spacing="6" alignment="CENTER_LEFT">
+                                <Label text="Commission:" />
+                                <ComboBox fx:id="commissionFilterComboBox" prefWidth="130" minWidth="70" />
+                            </HBox>
+                        </FlowPane>
                         <ListView fx:id="eventsListView" VBox.vgrow="ALWAYS" />
                     </VBox>
                     <ScrollPane fitToWidth="true">

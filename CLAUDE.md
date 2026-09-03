@@ -456,11 +456,37 @@ this stage actually starts:
   helper (`setWrapText(true)`) applied to every genuinely unbounded/multi-field label — the
   status-display block, trade-history rows, the OB stats/order/participant rows — while short,
   bounded labels (headers, placeholders) are left alone. See `ARCHITECTURE.md`.
-- The window sometimes opens with content cut off / not fully rendered until interacted
-  with or resized — investigated during Stage 6; no confirmed in-app root cause found. The
-  new `setMinWidth`/`setMinHeight` guard (below) is the one plausible low-risk mitigation, but
-  this may be a platform/driver-level timing quirk — **not marked resolved, re-check
-  specifically during Stage 6's manual resize testing.**
+- The window sometimes opens with content not fully rendered until interacted with or
+  resized — **re-checked during Stage 6's manual resize testing and confirmed real**,
+  reproduced a second time (the Events tab's filter-bar `Label`s rendering incorrectly until
+  their neighboring `ComboBox` is clicked). Root cause traced: a known JavaFX quirk where a
+  `ComboBox`'s `Skin` realizes lazily, so the very first CSS+layout pass (synchronous inside
+  `Stage.show()`) can measure stale sizes for it, before any later pulse (an interaction, a
+  resize) self-corrects. **Fix applied — `GuessMarketApp` now forces one extra layout pass
+  via `Platform.runLater` right after `show()` — but this is pending visual confirmation on
+  the next actual launch, not yet marked resolved**, since only watching the real first paint
+  can confirm it. See `ARCHITECTURE.md`.
+- Found during the same manual testing pass — **turned out to be a third, separate mechanism
+  from both items above, not the same root cause as either.** The three Events-list filter
+  `Label`s ("Method:", "Status:", "Commission:") truncated to ellipsis — but deterministically
+  and identically every time at the app's actual default window size, and gone every time once
+  maximized, which is the signature of a plain space deficit, not the paint-timing quirk above.
+  The first attempted fix (giving the three `ComboBox`es an explicit `prefWidth="130"`) made
+  the deficit *worse*, not better — it added real width demand without checking whether the
+  default-size left pane (≈390-395px available) had room for it (three `ComboBox`es at 130px
+  alone already demand 390px, by itself consuming virtually the entire budget). Measured by
+  hand (`GuessMarketApp.INITIAL_WIDTH = 960`, `SplitPane dividerPositions="0.48"`): closing
+  even the default-size gap needs a left pane of ~600-660px (window ~1250-1370px) — and the
+  already-committed `setMinWidth(640)` floor (left pane ≈307px) genuinely **cannot** fit six
+  side-by-side items at *any* `prefWidth`, so no fixed number can satisfy CLAUDE.md's own
+  resize rule here. **Structural fix applied**: `eventFilterBar` is now a wrapping `FlowPane`
+  of three label+combobox `HBox` pairs (checked against
+  ` docs-reference/ui-sketch-layout.md` first — the sketch's "Filter Line" explicitly leaves
+  widget choice open, so this doesn't diverge from it), guaranteed by the same arithmetic to
+  never truncate anything down to the 640px floor (worst case: three stacked lines). Accepted,
+  not a bug: the filter bar will likely wrap to 2-3 lines even at the default 960px width, a
+  real visual change from a single row. **Pending the same visual
+  confirmation as above.**
 - **Not purely cosmetic — a real (rare) precision edge case:** the Order Book submit form's
   price `TextField` accepts any parseable double, including more than 2 decimal places
   (e.g. a user typing `0.333`). The mint stage's exact-`d` invariant

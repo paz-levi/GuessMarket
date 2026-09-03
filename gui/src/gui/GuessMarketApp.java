@@ -1,6 +1,7 @@
 package gui;
 
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
@@ -42,5 +43,16 @@ public class GuessMarketApp extends Application {
         primaryStage.setMinWidth(640);
         primaryStage.setMinHeight(420);
         primaryStage.show();
+        // Known JavaFX quirk, not specific to this app: some Controls (ComboBox in particular) lazily realize their
+        // internal Skin, so the very first layout/CSS pass -- which runs synchronously inside show() -- can measure
+        // stale sizes for them, visibly mis-allocating space to HBox neighbors (e.g. the Events tab's filter-bar
+        // Labels). Any later pulse (a resize, or any interaction that forces requestLayout()) self-corrects -- which
+        // is exactly the "doesn't render right until interacted with" symptom reported twice now, in two different
+        // places. Forcing one extra layout pass on the *next* pulse (after this one's skins have finished realizing)
+        // makes the very first paint already correct, instead of relying on the user's own next interaction to fix it.
+        Platform.runLater(() -> {
+            scene.getRoot().applyCss();
+            scene.getRoot().layout();
+        });
     }
 }

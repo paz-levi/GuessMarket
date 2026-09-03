@@ -1511,6 +1511,17 @@ decided explicitly at submission time rather than folded silently into a refacto
   `setResizable(true)` — roughly 2/3 of the 960×640 initial size, a practical floor (a
   judgment call, not a spec number) so the window can't be dragged down to near-zero, while
   `resizable` itself stays untouched (already correct — see above).
+- **Stage 6 follow-up: first-paint layout timing.** Manual resize testing reproduced
+  CLAUDE.md's "doesn't render until interacted with" backlog item a second time (the Events
+  tab's filter-bar `Label`s), pointing at a shared root cause rather than two one-off bugs:
+  `ComboBox`'s `Skin` realizes some of its internal pieces lazily, so the CSS+layout pass that
+  runs synchronously inside `show()` can measure stale sizes for it, before any later pulse
+  (an interaction, a resize) self-corrects. Fixed at the source, once, rather than chasing
+  each symptom: `start()` now calls `Platform.runLater(() -> { scene.getRoot().applyCss();
+  scene.getRoot().layout(); })` right after `show()`, forcing one extra layout pass on the
+  next pulse — after that first pass's lazy skins have finished realizing — so the very first
+  frame the user actually sees is already correct. Pending the user's own visual confirmation
+  on the next launch (not claimed resolved from source-reading alone — see CLAUDE.md Section 9).
 
 #### `MainViewController` (`ui/src/ui/MainViewController.java` → now `gui/src/gui/MainViewController.java`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** `MainView.fxml`'s controller class (`fx:controller="ui.MainViewController"`),
@@ -1726,6 +1737,42 @@ decided explicitly at submission time rather than folded silently into a refacto
   remaining height) — per ` docs-reference/ui-sketch-layout.md`'s Slide 1, whose "Filter Line"
   sits above the event list specifically, inside the left column, not spanning the whole tab.
   The Users tab's `SplitPane`/`usersListView` is untouched; filters were scoped to Events only.
+  **Stage 6 follow-up (filter-bar truncation):** all three filter `ComboBox`es now carry an
+  explicit `prefWidth="130" minWidth="70"`. Root cause: `eventFilterBar`'s `Label`s (already
+  correctly left as plain, non-wrapping text — short and single-word) were losing a width
+  negotiation to their `ComboBox` siblings, not outgrowing their own container — a `Label`'s
+  default min already equals its full text width, but a default `ComboBox` has effectively no
+  "slack" (min ≈ pref) either, so when the whole `HBox`'s combined minimums exceeded the
+  Events tab's 48%-width `SplitPane` pane, both lost roughly proportionally, and the shorter
+  `Label`s ellipsized first. Giving the `ComboBox`es real slack (a `prefWidth` above a smaller
+  `minWidth`) means `HBox`'s shrink algorithm draws from them before touching the zero-slack
+  `Label`s. Genuinely different mechanism from the `wrappingLabel` fix above (sibling
+  competition within one row, not a single label outgrowing its own container), so it needed
+  its own diagnosis rather than being folded into that fix.
+  **Correction, same day:** manual testing showed that fix didn't actually hold — truncation
+  was deterministic and identical at the app's real default window size (960px), and gone
+  once maximized, the signature of a plain space deficit rather than the timing quirk it was
+  first assumed to share. Measured by hand: `SplitPane dividerPositions="0.48"` gives the left
+  pane ≈390-395px of room for the filter row's six children at 960px width — and the three
+  `ComboBox`es' own `prefWidth="130"` alone already demand 390px, consuming virtually the
+  entire budget before any `Label` is counted; the earlier fix had *added* demand without
+  checking room for it. Worse, the already-committed `setMinWidth(640)` floor gives the left
+  pane only ≈307px — mathematically too little for six side-by-side items at *any*
+  `prefWidth`, meaning no fixed number could ever satisfy CLAUDE.md's resize rule here.
+  `eventFilterBar` is now a `FlowPane` (`hgap="16" vgap="6"`) of three small `HBox` groups
+  (one per label+combobox pair, spacing 6, so wrapping only ever happens *between* whole
+  pairs, never separating a label from its own combobox) — checked first against
+  ` docs-reference/ui-sketch-layout.md`, whose "Filter Line" explicitly leaves widget choice
+  open, so this doesn't diverge from the sketch. Re-verified by hand this actually closes the
+  gap at the worst case, not just "probably enough": at the 640px floor (~283px usable after
+  padding/divider), a single pair is at most ≈225-230px, comfortably fitting one pair per
+  line — the layout degrades to three stacked lines rather than truncating anything, a real
+  guarantee from the arithmetic. `eventFilterBar`'s `fx:id` was confirmed (grep) unused by any
+  `@FXML` field in `MainViewController.java`, so the element-type change needed no Java-side
+  change. Accepted, not a regression: the filter bar will likely wrap to 2-3 lines even at the
+  960px default, not stay a single row — a real visual change from the original sketch-implied
+  layout, confirmed acceptable rather than chased further. Pending the user's own visual
+  confirmation, same as the timing-quirk fix above.
 
 #### `styles.css` (`ui/resources/ui/styles.css` → now `gui/resources/gui/styles.css`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A minimal hand-written CSS file (plain JavaFX `-fx-*` syntax) — a base font
