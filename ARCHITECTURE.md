@@ -1145,9 +1145,22 @@ prices from whatever counterparties are actually resting. All three classes are 
   `CommissionMode` themselves — an event's real status/method/mode can never legitimately be
   "ALL", so a filter-only constant on those enums would let invalid states leak into
   non-filter contexts. Scoping "all" to `null` on this DTO instead keeps the real enums clean.
-- **What it connects to:** Will be `IEngine.listEvents(EventFilterDto)`'s parameter (currently
-  a stub) — the original zero-arg `listEvents()` stays as an unmodified overload since
-  `ui.Main` still calls it.
+- **What it connects to:** `IEngine.listEvents(EventFilterDto)`'s parameter. The original
+  zero-arg `listEvents()` stays an unmodified overload since `ui.Main` still calls it — kept
+  literally byte-for-byte unchanged through the filters stage too, not just in spirit.
+  **Events-list filters stage:** `EngineImpl.listEvents(EventFilterDto)` is real now (was a
+  skeleton-stage stub): filters `events.values()` through a new private `matchesFilter`, which
+  short-circuits `false` on the first non-null dimension that doesn't match, then maps through
+  the same `toSummaryDto` the zero-arg overload already uses. Deliberately **not** factored
+  into a shared helper with the zero-arg overload — doing so would mean editing that method's
+  body, which the "unmodified overload" commitment above rules out; the small duplication (the
+  empty-check + stream-and-map shape) is accepted explicitly for that reason, not overlooked.
+  Covered by six new `EngineImplTest` cases against `test_files/ex2-multiple.xml`'s real,
+  confirmed event mix (events 1+4 LMSR, 2+3 Order Book; 1+3 on-purchase, 2+4 on-close; one
+  opened to get `ACTIVE` alongside `NOT_STARTED` for the status dimension): all-null matches
+  the zero-arg overload exactly, each dimension alone, a multi-dimension combination narrowing
+  further than any single one, and the same `InvalidCommandStateException` guard as the
+  zero-arg overload when nothing is loaded.
 
 #### `OrderResultDto` (`engine/src/dto/OrderResultDto.java`) — Order Book core stage, new
 - **What it is:** The receipt for one submitted order-book order: which option and side, how
@@ -1617,6 +1630,36 @@ decided explicitly at submission time rather than folded silently into a refacto
     rested in full with zero fills) renders through the same `formatNullableMoney`.
   - Explicitly out of scope, unchanged by this stage: mint (a separate, later stage) and Order
     Book `closeEvent` (still guarded server-side and hidden client-side).
+  - **Events-list filters stage:** three new `@FXML` `ComboBox` fields (method, status,
+    commission), populated in `initialize()` by a new generic `populateFilterComboBox` — `null`
+    inserted as the first item ("All"), then every enum value, rendered through a
+    `StringConverter` using the **same label the event list's own rows already show** for that
+    field (`toString()` for method/status, the existing `formatCommissionMode` for commission —
+    reused, not duplicated), so the filter never says something different from what it's
+    filtering by. Defaults to "All" via `selectFirst()`, not `select(null)` — JavaFX commonly
+    special-cases `select(null)` as "clear the selection" rather than "select the item whose
+    value is null," which would leave the box showing blank instead of "All."
+    **Ordering guaranteed by construction, not just careful sequencing:** all three
+    `populateFilterComboBox` calls (each ending in `selectFirst()`) run to completion before any
+    of the three `selectedItemProperty().addListener(...)` calls — `initialize()` is
+    synchronous and single-threaded on the FX thread, so `selectFirst()`'s initial "All"
+    selection notifies nothing (no listener is registered yet) and cannot fire
+    `refreshEventsList()` before a file is loaded. Verified both by this ordering argument and
+    at runtime, through the real FXML-loaded controller (not a stand-in): a reflection harness
+    loaded the actual `MainView.fxml`, confirmed the initial displayed text is "All" on all
+    three boxes with no startup error, then genuinely selected `LMSR` on the real `ComboBox`
+    (firing the real attached listener, not a direct method call) and confirmed
+    `eventsListView` narrowed from 4 to exactly the 2 real LMSR events.
+    `refreshEventsList()` now builds an `EventFilterDto` from the three boxes' current
+    selections and calls the filtered `listEvents` overload instead of the zero-arg one; every
+    existing call site (load success, open/close/buy/submit-order success) is unaffected since
+    they all just call the same method. **Known, deliberately accepted edge case, decided with
+    the user rather than silently picked:** the three filter boxes are enabled from app
+    startup, before any file is loaded — touching one that early throws
+    `InvalidCommandStateException`, caught and shown as a plain error alert ("Could not list
+    events" / "No events file has been loaded yet."). No crash; left as-is rather than adding
+    disable-until-loaded binding, since the existing catch already handles it gracefully and
+    this is a rarely-hit edge (why touch a filter before loading anything?).
 
 #### `MainView.fxml` (`ui/resources/ui/MainView.fxml` → now `gui/resources/gui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +
@@ -1628,6 +1671,12 @@ decided explicitly at submission time rather than folded silently into a refacto
   the shared chrome around it.
 - **What it connects to:** Loaded by `GuessMarketApp.start()`; its `fx:controller` binds it to
   `MainViewController`. Not yet reachable from `IEngine` in any way.
+  **Events-list filters stage:** the Events tab's `SplitPane` no longer holds `eventsListView`
+  directly as its first child — it's now a `VBox` (new `eventFilterBar` `HBox` of three
+  `ComboBox`es, then `eventsListView` with `VBox.vgrow="ALWAYS"` so it still fills the
+  remaining height) — per ` docs-reference/ui-sketch-layout.md`'s Slide 1, whose "Filter Line"
+  sits above the event list specifically, inside the left column, not spanning the whole tab.
+  The Users tab's `SplitPane`/`usersListView` is untouched; filters were scoped to Events only.
 
 #### `styles.css` (`ui/resources/ui/styles.css` → now `gui/resources/gui/styles.css`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A minimal hand-written CSS file (plain JavaFX `-fx-*` syntax) — a base font

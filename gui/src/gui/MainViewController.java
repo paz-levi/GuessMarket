@@ -4,6 +4,7 @@ import java.io.File;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import javafx.concurrent.Task;
@@ -23,8 +24,11 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Window;
+import javafx.util.StringConverter;
 
 import dto.CommissionMode;
+import dto.EventFilterDto;
+import dto.EventStatus;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
 import dto.TradeConfirmationDto;
@@ -50,6 +54,15 @@ public class MainViewController {
 
     @FXML
     private ProgressIndicator loadProgressIndicator;
+
+    @FXML
+    private ComboBox<TradingMethod> methodFilterComboBox;
+
+    @FXML
+    private ComboBox<EventStatus> statusFilterComboBox;
+
+    @FXML
+    private ComboBox<CommissionMode> commissionFilterComboBox;
 
     @FXML
     private ListView<EventSummaryDto> eventsListView;
@@ -87,6 +100,19 @@ public class MainViewController {
                 showEventDetails(newSelection.eventId());
             }
         });
+
+        // Populate every filter ComboBox -- including its internal selectFirst() default-to-"All" -- BEFORE attaching
+        // any selectedItemProperty listener below. selectFirst() only notifies listeners already registered at the
+        // moment it runs; since none exist yet during population, the initial "All" selection cannot trigger
+        // refreshEventsList() at startup, before any file is loaded.
+        populateFilterComboBox(methodFilterComboBox, TradingMethod.values(), "All", TradingMethod::toString);
+        populateFilterComboBox(statusFilterComboBox, EventStatus.values(), "All", EventStatus::toString);
+        populateFilterComboBox(commissionFilterComboBox, CommissionMode.values(), "All", MainViewController::formatCommissionMode);
+
+        methodFilterComboBox.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> refreshEventsList());
+        statusFilterComboBox.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> refreshEventsList());
+        commissionFilterComboBox.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> refreshEventsList());
+
         usersListView.setCellFactory(list -> new ListCell<>() {
             @Override
             protected void updateItem(UserSummaryDto user, boolean empty) {
@@ -144,11 +170,16 @@ public class MainViewController {
         thread.start();
     }
 
-    // Re-reads the full event list from the engine and refreshes the Events tab; called right after a successful load.
-    // Package-private: also called from OrderBookPanelBuilder after a successful order submission.
+    // Re-reads the event list from the engine, filtered by the three filter ComboBoxes' current selections, and
+    // refreshes the Events tab; called right after a successful load, and again whenever a filter selection changes
+    // or a trading action completes. Package-private: also called from OrderBookPanelBuilder after order submission.
     void refreshEventsList() {
         try {
-            List<EventSummaryDto> events = engine.listEvents();
+            EventFilterDto filter = new EventFilterDto(
+                    methodFilterComboBox.getSelectionModel().getSelectedItem(),
+                    statusFilterComboBox.getSelectionModel().getSelectedItem(),
+                    commissionFilterComboBox.getSelectionModel().getSelectedItem());
+            List<EventSummaryDto> events = engine.listEvents(filter);
             eventsListView.getItems().setAll(events);
         } catch (GuessMarketException e) {
             // Not expected to be reachable right after a successful load, but handled defensively rather than assumed away.
@@ -465,6 +496,29 @@ public class MainViewController {
             // practice -- leave the combo box empty rather than block the rest of the form from rendering.
         }
         return comboBox;
+    }
+
+    // Populates one Events-list filter ComboBox: null ("All") as the first item, then every value of the enum,
+    // rendered through toLabel -- the SAME label the event list's own rows already use for that field, so the
+    // filter never shows different wording than what it's actually filtering by. Defaults to "All" via
+    // selectFirst() rather than select(null): JavaFX commonly special-cases select(null) as "clear the selection"
+    // rather than "select the item whose value is null," which would leave the box showing blank instead of "All".
+    private static <T> void populateFilterComboBox(ComboBox<T> comboBox, T[] values, String allLabel,
+                                                     Function<T, String> toLabel) {
+        comboBox.getItems().add(null);
+        comboBox.getItems().addAll(values);
+        comboBox.setConverter(new StringConverter<T>() {
+            @Override
+            public String toString(T value) {
+                return value == null ? allLabel : toLabel.apply(value);
+            }
+
+            @Override
+            public T fromString(String string) {
+                throw new UnsupportedOperationException(); // not editable, never needs parsing back
+            }
+        });
+        comboBox.getSelectionModel().selectFirst(); // index 0 = the null/"All" item just inserted above
     }
 
     // Reads the quantity field's text exactly as typed; a genuine parse failure is the only ui-level check — everything

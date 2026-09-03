@@ -515,9 +515,27 @@ public class EngineImpl implements IEngine {
                 averageFillPrice, fillDtos, toStatusDto(event));
     }
 
-    // Not yet implemented — Ex2 skeleton stage stub.
+    // Returns a summary DTO for every currently loaded event matching every non-null dimension of filter.
     @Override
     public List<EventSummaryDto> listEvents(EventFilterDto filter) throws InvalidCommandStateException {
-        throw new UnsupportedOperationException("listEvents(EventFilterDto) not yet implemented");
+        if (events.isEmpty()) {
+            throw new InvalidCommandStateException(NO_FILE_LOADED_MESSAGE);
+        }
+        return events.values().stream()
+                .filter(event -> matchesFilter(event, filter))
+                .map(EngineImpl::toSummaryDto)
+                .toList();
+    }
+
+    // Whether event passes every non-null dimension of filter -- a null field means no restriction on that dimension.
+    private static boolean matchesFilter(Event event, EventFilterDto filter) {
+        if (filter.tradingMethod() != null && event.getTradingMethod() != filter.tradingMethod()) {
+            return false;
+        }
+        if (filter.status() != null && event.getStatus() != filter.status()) {
+            return false;
+        }
+        return filter.commissionMode() == null
+                || toDtoCommissionMode(event.getCommissionMode()) == filter.commissionMode();
     }
 }

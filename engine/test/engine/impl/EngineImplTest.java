@@ -8,7 +8,11 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import dto.CommissionMode;
+import dto.EventFilterDto;
+import dto.EventStatus;
 import dto.EventStatusDto;
+import dto.EventSummaryDto;
 import dto.OrderSide;
 import dto.SubmitOrderRequestDto;
 import dto.TradingMethod;
@@ -16,6 +20,7 @@ import dto.UserEventParticipationDto;
 import dto.UserSummaryDto;
 import engine.IEngine;
 import exception.IllegalTradeException;
+import exception.InvalidCommandStateException;
 
 // Deliberately NOT a full EngineImpl test suite -- that gap (flagged repeatedly through this session; every
 // method-routing guard so far has only ever been checked by throwaway harnesses) stays open. This file exists for
@@ -107,6 +112,85 @@ class EngineImplTest {
         assertEquals(0.0, participation.optionOneAmountPaid(), DELTA); // no holdings-based cost-basis concept
         assertEquals(0.0, participation.optionTwoAmountPaid(), DELTA);
         assertTrue(participation.tradeHistory().isEmpty());
+    }
+
+    // Reuses test_files/ex2-multiple.xml's real, confirmed mix for the filter tests: event 1 = LMSR/on-purchase
+    // (MM Tikva), event 2 = Order Book/on-close (MM Avrum), event 3 = Order Book/on-purchase (MM Tikva),
+    // event 4 = LMSR/on-close (MM Tikva). All four load NOT_STARTED.
+    private static final String MULTI_EVENT_FIXTURE_FILE = "test_files/ex2-multiple.xml";
+
+    // A filter with every field null must return exactly what the zero-arg overload returns -- the "no restriction
+    // on any dimension" case, and the one this stage's plan explicitly required not to touch that other overload.
+    @Test
+    void listEventsWithAllNullFilterFieldsMatchesTheZeroArgOverload() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(MULTI_EVENT_FIXTURE_FILE);
+
+        List<EventSummaryDto> unfiltered = engine.listEvents();
+        List<EventSummaryDto> allNullFilter = engine.listEvents(new EventFilterDto(null, null, null));
+
+        assertEquals(unfiltered, allNullFilter);
+        assertEquals(4, allNullFilter.size());
+    }
+
+    @Test
+    void listEventsFiltersByTradingMethodAlone() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(MULTI_EVENT_FIXTURE_FILE);
+
+        List<EventSummaryDto> lmsrOnly = engine.listEvents(new EventFilterDto(TradingMethod.LMSR, null, null));
+        List<EventSummaryDto> orderBookOnly = engine.listEvents(new EventFilterDto(TradingMethod.ORDER_BOOK, null, null));
+
+        assertEquals(List.of(1, 4), lmsrOnly.stream().map(EventSummaryDto::eventId).toList());
+        assertEquals(List.of(2, 3), orderBookOnly.stream().map(EventSummaryDto::eventId).toList());
+    }
+
+    // Opens event 1 so ACTIVE and NOT_STARTED both exist among the four events -- otherwise every event would
+    // still be NOT_STARTED on load and this dimension couldn't actually be exercised.
+    @Test
+    void listEventsFiltersByStatusAlone() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(MULTI_EVENT_FIXTURE_FILE);
+        engine.openEvent(1, "Tikva");
+
+        List<EventSummaryDto> active = engine.listEvents(new EventFilterDto(null, EventStatus.ACTIVE, null));
+        List<EventSummaryDto> notStarted = engine.listEvents(new EventFilterDto(null, EventStatus.NOT_STARTED, null));
+
+        assertEquals(List.of(1), active.stream().map(EventSummaryDto::eventId).toList());
+        assertEquals(List.of(2, 3, 4), notStarted.stream().map(EventSummaryDto::eventId).toList());
+    }
+
+    @Test
+    void listEventsFiltersByCommissionModeAlone() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(MULTI_EVENT_FIXTURE_FILE);
+
+        List<EventSummaryDto> onPurchase = engine.listEvents(new EventFilterDto(null, null, CommissionMode.ON_PURCHASE));
+        List<EventSummaryDto> onClose = engine.listEvents(new EventFilterDto(null, null, CommissionMode.ON_CLOSE));
+
+        assertEquals(List.of(1, 3), onPurchase.stream().map(EventSummaryDto::eventId).toList());
+        assertEquals(List.of(2, 4), onClose.stream().map(EventSummaryDto::eventId).toList());
+    }
+
+    // Combining dimensions narrows further than any single dimension alone -- Order Book alone matches {2, 3};
+    // on-purchase alone matches {1, 3}; together only event 3 satisfies both.
+    @Test
+    void listEventsFiltersByMultipleDimensionsCombined() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(MULTI_EVENT_FIXTURE_FILE);
+
+        List<EventSummaryDto> result = engine.listEvents(
+                new EventFilterDto(TradingMethod.ORDER_BOOK, null, CommissionMode.ON_PURCHASE));
+
+        assertEquals(List.of(3), result.stream().map(EventSummaryDto::eventId).toList());
+    }
+
+    // Same "nothing loaded" guard as the zero-arg overload, exercised on the filtered one.
+    @Test
+    void listEventsWithFilterThrowsWhenNothingLoaded() {
+        IEngine engine = IEngine.createDefault();
+        assertThrows(InvalidCommandStateException.class,
+                () -> engine.listEvents(new EventFilterDto(null, null, null)));
     }
 
     // Sums every currently loaded user's balance plus one event's own account balance -- the full pool of money
