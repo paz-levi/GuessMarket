@@ -147,13 +147,13 @@ public class EngineImpl implements IEngine {
                     + event.getStatus() + ") and cannot be closed.");
         }
         // TradeExecutor.close() is pure LMSR settlement math (it pays the winning option's outstanding shares out of
-        // the MM account). Running it on an Order Book event would silently produce nonsense, so it is refused until
-        // Order Book settlement is actually implemented.
+        // the MM account); it would silently produce nonsense on an Order Book event, which settles from
+        // OptionBook.holdings instead via its own OrderBookExecutor.close() -- see CLAUDE.md Section 8 item 4.
         if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
-            throw new IllegalTradeException("Event id " + eventId
-                    + " is an Order Book event; closing Order Book events is not yet supported in this build.");
+            OrderBookExecutor.close(event, winningOptionNumber, users);
+        } else {
+            TradeExecutor.close(event, winningOptionNumber, users);
         }
-        TradeExecutor.close(event, winningOptionNumber, users);
         return toStatusDto(event);
     }
 

@@ -21,6 +21,7 @@ import dto.UserSummaryDto;
 import engine.IEngine;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
+import exception.UnauthorizedMarketMakerException;
 
 // Deliberately NOT a full EngineImpl test suite -- that gap (flagged repeatedly through this session; every
 // method-routing guard so far has only ever been checked by throwaway harnesses) stays open. This file exists for
@@ -57,16 +58,51 @@ class EngineImplTest {
         assertEquals(0.0, engine.getEventStatus(1).marketMakerBalance(), DELTA);
     }
 
-    // Regression: the OB-close guard added in the Order Book core stage still rejects closing an Order Book event
-    // outright, unaffected by either FIX 1 or FIX 2. This exact guard had no permanent test anywhere before this --
-    // only throwaway harnesses, run once and discarded, during the stage that added it.
+    // Stage 7.5: Order Book closeEvent is no longer a blanket guard -- it actually settles now. Replaces the old
+    // closeEventStillRejectsOrderBookEventsAfterLeftoverFix, whose entire premise (OB close is always rejected)
+    // this stage makes false. Full cycle through the real IEngine, not OrderBookExecutor called directly: Avrum
+    // (MM) rests a sell from his own initial allocation, Menash's buy fills it, then Avrum closes with "Argentina"
+    // (option 1) as the winner. Same conservation standard as the LMSR test above.
     @Test
-    void closeEventStillRejectsOrderBookEventsAfterLeftoverFix() {
+    void closeEventNowSettlesOrderBookEventsAndConservesTotalMoney() {
         IEngine engine = IEngine.createDefault();
         engine.loadEventsFile(FIXTURE_FILE);
-        engine.openEvent(2, "Avrum"); // event 2 is the Order Book event in this fixture
+        double totalBefore = totalMoney(engine, 2);
+
+        engine.openEvent(2, "Avrum"); // Order Book; Avrum now holds 100/100 (initial allocation)
+        engine.submitOrder(new SubmitOrderRequestDto("Avrum", 2, 1, OrderSide.SELL, 5, 0.50)); // rests
+        engine.submitOrder(new SubmitOrderRequestDto("Menash", 2, 1, OrderSide.BUY, 5, 0.55));  // fills @0.50
+        engine.closeEvent(2, "Avrum", 1); // "Argentina" (option 1) wins
+
+        double totalAfter = totalMoney(engine, 2);
+        assertEquals(totalBefore, totalAfter, DELTA);
+        // The account holds pure principal (initial + any mint, neither commission mode ever touches it during
+        // trading) and this event's option 1 shares outstanding are backed exactly d-per-pair, so a full-gross
+        // payout drains it to precisely 0.0, same standard as the LMSR fix above.
+        assertEquals(0.0, engine.getEventStatus(2).marketMakerBalance(), DELTA);
+    }
+
+    // Regression: the shared auth/status guard chain in EngineImpl.closeEvent still fires for Order Book events
+    // now that they actually reach OrderBookExecutor.close() instead of a blanket throw -- re-closing an
+    // already-CLOSED event is still rejected.
+    @Test
+    void closeEventStillRejectsAnAlreadyClosedOrderBookEvent() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(FIXTURE_FILE);
+        engine.openEvent(2, "Avrum");
+        engine.closeEvent(2, "Avrum", 1);
 
         assertThrows(IllegalTradeException.class, () -> engine.closeEvent(2, "Avrum", 1));
+    }
+
+    // Regression, same guard chain: a non-MM still cannot close an Order Book event.
+    @Test
+    void closeEventStillRejectsANonMarketMakerForAnOrderBookEvent() {
+        IEngine engine = IEngine.createDefault();
+        engine.loadEventsFile(FIXTURE_FILE);
+        engine.openEvent(2, "Avrum");
+
+        assertThrows(UnauthorizedMarketMakerException.class, () -> engine.closeEvent(2, "Menash", 1));
     }
 
     // Regression: getUser's per-event participation entry reported TradingMethod.LMSR unconditionally, hardcoded

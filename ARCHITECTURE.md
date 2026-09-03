@@ -318,12 +318,11 @@ flowchart TD
     quantity", which misdiagnoses the problem and gives advice that can never work (no
     quantity succeeds, because LMSR participation is meaningless on an order book). Reachable
     in practice: the Events tab used to show a Buy form for every event regardless of method.
-  - `closeEvent` **refuses Order Book events** with `IllegalTradeException`.
-    `TradeExecutor.close()` is pure LMSR settlement (it pays the winning option's outstanding
-    shares out of the MM account); running it on an Order Book event would silently produce
-    nonsense rather than fail. Order Book settlement is a later stage — and one that still has
-    an open spec question about what happens to resting orders at close (see `CLAUDE.md`
-    Section 8), so guarding was the only honest option here.
+  - ~~`closeEvent` refuses Order Book events with `IllegalTradeException`~~ — **implemented,
+    Stage 7.5**, once the three forum questions blocking it resolved (CLAUDE.md Section 8
+    item 4). The blanket throw is now a real branch to `OrderBookExecutor.close(event,
+    winningOptionNumber, users)`; `TradeExecutor.close()` (the LMSR path) is untouched. See
+    `OrderBookExecutor`'s own entry below for the settlement logic itself.
   - **`toStatusDto`/`toSummaryDto` — a real latent bug fixed, not just an extension.** Both
     hardcoded `TradingMethod.LMSR`, and `toStatusDto` called `LmsrMath.price(...)`
     unconditionally. An Order Book event's `liquidityParameter` is `0`, so that path computed
@@ -892,6 +891,40 @@ prices from whatever counterparties are actually resting. All three classes are 
     `Fixture` previously never assigned an MM at all (`getMarketMakerUsername()` was `null` in
     every test) — now assigns a dedicated `MARKET_MAKER_NAME` distinct from every trader name,
     both fixing that latent gap and letting these tests observe where the money actually lands.
+  - **Stage 7.5: `close(Event, int, Map<String, User>)`, new — the blocker finally cleared.**
+    Three forum questions blocked this since the core stage; all three resolved (CLAUDE.md
+    Section 8 item 4). Mirrors `TradeExecutor.close`'s name/three-parameter shape/role, but
+    deliberately **not** its internal "hold commission back from the debit, let it flow out as
+    leftover subsidy" trick — Order Book has no leftover-subsidy concept at all (unlike LMSR,
+    whose subsidy formula and payout formula genuinely differ). Confirmed by reading every
+    place that ever touches the account: `openEvent` credits `initial × d` once,
+    `mintAgainstOppositeOption` credits `d` per minted pair, and an ordinary fill touches it
+    under neither commission mode (not since the fix immediately above) — so at any moment
+    `account.balance == sharesOutstanding(either option) × d` exactly, and debiting the full
+    gross payout (`sharesOutstanding(winningOption) × d`) always drains it to precisely `0.0`,
+    by construction, not via a sweep step. Pays from `OptionBook.holdings` (not trade-history
+    replay, which only works for LMSR since it has no sell), proportional to each holder's own
+    shares — losing-option holders are never even visited. `ON_CLOSE` commission is computed
+    per holder (`shares × d × rate/100`), deducted from that holder's own net payout,
+    accumulated, and credited to the MM **personally** in one final credit — the same
+    destination as the on-purchase fix above, extended to `on-close` **by this stage's own
+    consistency interpretation**, not a second independent lecturer confirmation (CLAUDE.md
+    Section 8 item 4 already anticipated this exact extension in writing). `ON_PURCHASE`
+    deducts nothing further at close — already fully settled per-fill. Resting orders are left
+    in the book untouched at close — checked for a display reason beyond the lecturer's
+    "financially inert" confirmation and found none: `MainViewController`'s `CLOSED` branch
+    already replaces the whole active-controls area with a placeholder instead of building the
+    book-display panel at all, so nothing would show them anyway. Hand-traced against a
+    concrete 60/40-holder example before writing any code (60→net 48.00, 40→net 32.00 under a
+    20% `ON_CLOSE` rate, commission 20.00 to the MM, account `100.00 → 0.00` exactly) — six new
+    tests cover: proportional (not equal-split) payout combined with commission-isolation
+    (the MM holds none of the winning option in that scenario, so her gain there can only be
+    the commission), a losing-option holder's balance provably untouched by close, `ON_CLOSE`
+    commission math end to end, `ON_PURCHASE` needing zero extra deduction, a blocked winner
+    auto-unblocking on credit, and full open→trade→close conservation.
+    `EngineImpl.closeEvent`'s blanket OB throw is now a real branch to this method; its shared
+    auth/status guard chain (unchanged) is what the two OB regression tests in
+    `EngineImplTest` confirm still fires.
 
 ### `engine.impl.state` package
 
@@ -1683,7 +1716,11 @@ decided explicitly at submission time rather than folded silently into a refacto
     would misdescribe a seller's proceeds. Average fill price (`Double`, null when the order
     rested in full with zero fills) renders through the same `formatNullableMoney`.
   - Explicitly out of scope, unchanged by this stage: mint (a separate, later stage) and Order
-    Book `closeEvent` (still guarded server-side and hidden client-side).
+    Book `closeEvent` (server-side settlement now real as of Stage 7.5 — see
+    `OrderBookExecutor`'s entry — but still hidden client-side here: `buildActiveControls`
+    never shows a Close form for `ORDER_BOOK` events, since this panel is only built for
+    `ACTIVE` events in the first place and a `CLOSED` event gets a plain placeholder instead;
+    exposing an OB close control in the GUI is a separate, not-yet-scheduled UI stage).
   - **Events-list filters stage:** three new `@FXML` `ComboBox` fields (method, status,
     commission), populated in `initialize()` by a new generic `populateFilterComboBox` — `null`
     inserted as the first item ("All"), then every enum value, rendered through a

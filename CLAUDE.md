@@ -398,17 +398,22 @@ reason. Default is a hand-written CSS file; revisit only after explicit confirma
    trading has stopped for that stock." Matches the existing (non-)implementation exactly —
    `closeEvent` for Order Book is still just a guard, so there was never any resting-order
    handling to begin with; none is needed now either.
-4. **Order Book close — architectural note, simplified by item 2's resolution.** Pay out
-   from `OptionBook.holdings` (not by replaying `Trade.buyerUsername`, which only works for
-   LMSR since it has no sell). Pay exactly `d` per winning share held to each holder. **No
-   commission carve-out needed at close anymore** — per item 2, `on-purchase` commission
-   never reaches the event account in the first place, and `on-close` commission (still
-   unimplemented for Order Book) would credit the MM directly at close time the same way, so
-   the account should hold pure principal only and drain to exactly zero by construction,
-   with no ambiguity left to resolve. Assert that precisely in tests, the same way LMSR's
-   fix did. Also still applies: whether `on-close` is even reachable yet (deferred,
-   unimplemented per the Order Book core stage), and the same
-   blocked-user-auto-unblocks-on-credit principle LMSR's fix already established.
+4. **Implemented, Stage 7.5 — `OrderBookExecutor.close`.** Pays out from `OptionBook.holdings`
+   (not by replaying `Trade.buyerUsername`, which only works for LMSR since it has no sell),
+   exactly `d` per winning share held, proportional to each holder's own shares. No
+   commission carve-out complexity: `on-purchase` never reaches the event account in the
+   first place (item 2), and `on-close` commission is now computed per holder and credited to
+   the MM directly, the same destination — **this specific extension (`on-close` → MM
+   personally) is this stage's own interpretation by consistency, not a second independent
+   lecturer confirmation**, though it's the exact extension this item already anticipated in
+   writing before the code existed. The account holds pure principal only and drains to
+   exactly zero by construction, verified against a hand-traced 60/40-holder example before
+   any code was written, then asserted precisely in tests (same standard as LMSR's own fix).
+   Resting orders are left untouched at close (financially inert per item 3, and no display
+   reason either — the GUI never renders the book panel for a `CLOSED` event to begin with).
+   The blocked-user-auto-unblocks-on-credit principle carries over, tested. **Still open,
+   separately:** the GUI has no Close control for an Order Book event at all yet (only the
+   engine-level `IEngine.closeEvent` path is real) — a distinct, not-yet-scheduled UI stage.
 5. ~~Self-trading in the Order Book (including self-mint)~~ — **confirmed directly by the
    lecturer**: "an interesting edge case, but not one that will be tested — technically
    nothing in the system's requirements prevents it, so there's no reason for you to prevent

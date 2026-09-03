@@ -533,6 +533,117 @@ class OrderBookExecutorTest {
         assertEquals(35 * D, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
     }
 
+    // The hand-traced example from the stage's own plan: MM sells her entire initial 100-share pile of option
+    // "Yes" to two different buyers (60 to Zoe, 40 to Bob), so neither winning holder is the MM -- a clean
+    // isolation of two things at once: (a) payout is PROPORTIONAL to each holder's own shares, not an equal
+    // split (60/40 holdings -> 48.00/32.00 net payouts, not 40.00/40.00), and (b) the accumulated ON_CLOSE
+    // commission (12.00 + 8.00 = 20.00) lands on the MM's own personal balance as a pure bystander credit, while
+    // the event account is touched by nothing except the single full-gross debit that drains it to exactly zero.
+    @Test
+    void closePaysWinningHoldersProportionallyAndRoutesOnCloseCommissionToTheMmAlone() {
+        Fixture fixture = new Fixture(20, CommissionMode.ON_CLOSE);
+        fixture.openWithInitialAllocation(100);
+        fixture.restAsk(MARKET_MAKER_NAME, 1, 100, 0.50);
+        fixture.submit("Zoe", 1, OrderSide.BUY, 60, 0.55);  // fills 60 @ 0.50
+        fixture.submit("Bob", 1, OrderSide.BUY, 40, 0.55);  // fills the remaining 40 @ 0.50
+
+        double mmBalanceBeforeClose = fixture.balanceOf(MARKET_MAKER_NAME);
+        fixture.close(1); // "Yes" wins
+
+        // Proportional payout: Zoe (60 shares) and Bob (40 shares) net exactly 48.00/32.00, not an equal split.
+        assertEquals(970.0 + 48.0, fixture.balanceOf("Zoe"), DELTA); // 1000 - (60*0.50) + 48.00
+        assertEquals(980.0 + 32.0, fixture.balanceOf("Bob"), DELTA); // 1000 - (40*0.50) + 32.00
+
+        // Isolation: the MM holds ZERO "Yes" shares at close (sold her entire pile), so whatever she gains here
+        // can only be the accumulated commission -- nothing else.
+        assertEquals(20.0, fixture.balanceOf(MARKET_MAKER_NAME) - mmBalanceBeforeClose, DELTA);
+
+        // The account is touched by nothing but the one full-gross debit: it drains to exactly 0.0, not an
+        // approximation -- 100 shares outstanding * d(1) = 100.00, matching the account's entire balance.
+        assertEquals(0.0, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(20.0, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+    }
+
+    // A user holding only the LOSING option's shares is never visited by the payout loop at all -- confirmed by
+    // asserting their balance is bit-for-bit unchanged by the close() call itself (not "unchanged overall": their
+    // earlier purchase legitimately cost them money, only the close operation itself should add nothing).
+    @Test
+    void closeLeavesLosingOptionHoldersBalanceExactlyUnchanged() {
+        Fixture fixture = new Fixture(20, CommissionMode.ON_CLOSE);
+        fixture.openWithInitialAllocation(100);
+        fixture.restAsk(MARKET_MAKER_NAME, 2, 20, 0.30);
+        fixture.submit("Carol", 2, OrderSide.BUY, 20, 0.35); // Carol now holds 20 of "No" (the losing option), 0 of "Yes"
+
+        double carolBalanceBeforeClose = fixture.balanceOf("Carol");
+        fixture.close(1); // "Yes" wins; Carol holds none of it
+
+        assertEquals(carolBalanceBeforeClose, fixture.balanceOf("Carol"), DELTA);
+    }
+
+    // Under ON_PURCHASE, on-purchase commission is already fully collected at fill time (today's earlier fix) --
+    // close() must deduct NOTHING further: winners get their full gross share, and no new commission is added to
+    // the running total by close() itself.
+    @Test
+    void onPurchaseModeDeductsNoAdditionalCommissionAtClose() {
+        Fixture fixture = new Fixture(20, CommissionMode.ON_PURCHASE);
+        fixture.openWithInitialAllocation(100);
+        fixture.restAsk(MARKET_MAKER_NAME, 1, 100, 0.50);
+        fixture.submit("Zoe", 1, OrderSide.BUY, 60, 0.55);
+        fixture.submit("Bob", 1, OrderSide.BUY, 40, 0.55);
+
+        double commissionBeforeClose = fixture.event.getMarketMakerAccount().getTotalCommissionCollected();
+        double zoeBalanceBeforeClose = fixture.balanceOf("Zoe");
+        double bobBalanceBeforeClose = fixture.balanceOf("Bob");
+        fixture.close(1);
+
+        // Full gross, not net of any close-time deduction: 60.00 and 40.00 exactly, no commission carved out here.
+        assertEquals(zoeBalanceBeforeClose + 60.0, fixture.balanceOf("Zoe"), DELTA);
+        assertEquals(bobBalanceBeforeClose + 40.0, fixture.balanceOf("Bob"), DELTA);
+        // The running counter is unchanged by close() itself -- whatever it already held from fill-time collection stays exactly as-is.
+        assertEquals(commissionBeforeClose, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
+        assertEquals(0.0, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+    }
+
+    // Same interpretation LMSR's own close() fix already established, now verified for Order Book's holdings-based
+    // payout path too: a winner who was pushed negative earlier and blocked is unblocked the moment their payout
+    // credit brings their balance back to non-negative.
+    @Test
+    void closeAutoUnblocksAPreviouslyBlockedWinner() {
+        Fixture fixture = new Fixture(0, CommissionMode.ON_CLOSE);
+        fixture.users.put("Broke", new User("Broke", 1.0));
+        fixture.openWithInitialAllocation(20);
+        fixture.restAsk(MARKET_MAKER_NAME, 1, 20, 0.50);
+        fixture.submit("Broke", 1, OrderSide.BUY, 20, 0.50); // pays 10.00, balance 1.0 - 10.0 = -9.0 -> blocked
+
+        assertTrue(fixture.users.get("Broke").isBlocked());
+        fixture.close(1); // "Yes" wins; Broke holds all 20 shares -> credited 20.00
+
+        assertEquals(-9.0 + 20.0, fixture.balanceOf("Broke"), DELTA);
+        assertTrue(fixture.balanceOf("Broke") >= 0);
+        assertTrue(!fixture.users.get("Broke").isBlocked());
+    }
+
+    // System-wide conservation across a full open -> trade -> close cycle for an Order Book event -- the same
+    // highest-value assertion already used for every other money-moving path in this codebase.
+    @Test
+    void closeConservesTotalMoneyAcrossAccountAndUsersForOrderBook() {
+        Fixture fixture = new Fixture(15, CommissionMode.ON_CLOSE);
+        double totalBefore = fixture.balanceOf("Zoe") + fixture.balanceOf("Bob") + fixture.balanceOf("Carol")
+                + fixture.balanceOf("Alice") + fixture.balanceOf(MARKET_MAKER_NAME);
+
+        fixture.openWithInitialAllocation(100);
+        fixture.restAsk(MARKET_MAKER_NAME, 1, 70, 0.40);
+        fixture.submit("Zoe", 1, OrderSide.BUY, 45, 0.50);
+        fixture.submit("Bob", 1, OrderSide.BUY, 25, 0.50);
+        fixture.close(1);
+
+        double totalAfter = fixture.balanceOf("Zoe") + fixture.balanceOf("Bob") + fixture.balanceOf("Carol")
+                + fixture.balanceOf("Alice") + fixture.balanceOf(MARKET_MAKER_NAME)
+                + fixture.event.getMarketMakerAccount().getBalance();
+        assertEquals(totalBefore, totalAfter, DELTA);
+        assertEquals(0.0, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+    }
+
     // Small harness: one Order Book event, three funded users, and helpers to seed books and holdings directly.
     private static final class Fixture {
         private final Event event;
@@ -560,6 +671,22 @@ class OrderBookExecutorTest {
 
         OptionBook book(int optionNumber) {
             return event.getOrderBook().getBook(optionNumber);
+        }
+
+        // Mirrors EngineImpl.openEvent's real Order Book branch: allocates initial pairs to the MM on both
+        // OptionBooks, grows both options' sharesOutstanding by the same amount, and credits the event account
+        // by pairs * D -- so the account-balance-equals-sharesOutstanding-times-d invariant close() relies on
+        // holds from the very first line of a test, exactly as it would in production.
+        void openWithInitialAllocation(double pairs) {
+            event.getOrderBook().allocateInitialShares(MARKET_MAKER_NAME, pairs);
+            event.getOptionOne().addShares(pairs);
+            event.getOptionTwo().addShares(pairs);
+            event.getMarketMakerAccount().credit(pairs * D);
+            users.get(MARKET_MAKER_NAME).debit(pairs * D);
+        }
+
+        void close(int winningOptionNumber) {
+            OrderBookExecutor.close(event, winningOptionNumber, users);
         }
 
         double balanceOf(String username) {

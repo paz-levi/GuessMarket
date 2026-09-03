@@ -94,6 +94,55 @@ public final class OrderBookExecutor {
         return fills;
     }
 
+    // Closes an ACTIVE Order Book event: pays exactly d per winning share held (from
+    // OptionBook.holdings, not trade history -- unlike LMSR, Order Book allows selling, so net
+    // holdings and buy history are not the same thing), settles ON_CLOSE commission per holder
+    // directly to the MM's own personal balance, and marks the event closed. Losing-option
+    // holders receive nothing and are never visited. Mirrors TradeExecutor.close's name/shape/
+    // role, but deliberately NOT its internal "hold commission back from the debit, sweep it out
+    // as leftover subsidy" trick -- Order Book has no leftover-subsidy concept at all (unlike
+    // LMSR, whose subsidy and payout formulas genuinely differ): the account's entire balance at
+    // close time is always exactly sharesOutstanding(winningOption) x d (nothing else ever
+    // credits or debits it -- open() credits initial x d once, a mint credits d per pair, and an
+    // ordinary fill never touches it under either commission mode), so debiting that full gross
+    // amount always drains it to precisely 0.0, by construction.
+    public static void close(Event event, int winningOptionNumber, Map<String, User> users) {
+        validateOptionNumber(event, winningOptionNumber);
+        EventOption winningOption = event.getOption(winningOptionNumber);
+        OptionBook winningBook = event.getOrderBook().getBook(winningOptionNumber);
+        double d = event.getOrderBook().getD();
+
+        double payoutOwed = winningOption.getSharesOutstanding() * d;
+        event.getMarketMakerAccount().debit(payoutOwed);
+
+        double totalCommission = 0.0;
+        for (Map.Entry<String, Double> holding : winningBook.getHoldings().entrySet()) {
+            double shares = holding.getValue();
+            if (shares <= 0) {
+                continue; // a zero/negative net holding on this option needs no payout
+            }
+            User holder = users.get(holding.getKey());
+            if (holder == null) {
+                continue; // defensive; every holdings key comes from a real submitted/allocated order
+            }
+            double gross = shares * d;
+            double commission = event.getCommissionMode() == CommissionMode.ON_CLOSE
+                    ? gross * event.getCommissionRate() / 100.0
+                    : 0.0;
+            holder.credit(gross - commission);
+            totalCommission += commission;
+        }
+
+        if (totalCommission > 0) {
+            User marketMaker = users.get(event.getMarketMakerUsername());
+            if (marketMaker != null) {          // defensive; EventsFileLoader guarantees this in practice
+                marketMaker.credit(totalCommission);
+            }
+            event.getMarketMakerAccount().addCommissionCollected(totalCommission);
+        }
+        event.close(winningOption);
+    }
+
     // Matches the incoming BUY order against the OTHER option's resting bids (best price first), creating
     // brand-new share-pairs whenever a resting bid's price plus the incoming order's own limit price together
     // reach at least d. The resting side fills at its own unchanged price; the incoming side fills at the
