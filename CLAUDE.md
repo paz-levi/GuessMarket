@@ -147,7 +147,12 @@ same interface next.
   classes (e.g. `OrderBookPanelBuilder`, not FXML, not a separate `Controller`) that
   `MainViewController` calls — this keeps the controller from growing further without
   committing to the harder inter-controller design before the full picture (incl. Order
-  Book UI) is known. Revisit a real `<fx:include>` split in the polish stage if time allows.
+  Book UI) is known. **Revisit trigger, made concrete (not "if time allows"):** before
+  starting Exercise 3, not during Exercise 2's polish stage — Ex3 builds its client-server
+  split on top of whatever `gui` looks like at that point, so the bottleneck only gets worse
+  the longer this waits past Ex2. Decided explicitly on 2026-09-03: finish and submit Ex2
+  first, unchanged; do the real `<fx:include>` split as the first thing before Ex3 work
+  begins, not squeezed into Ex2's remaining ~9 days.
 
 ### Existing structure — confirmed from `ARCHITECTURE.md`, read it before adding anything
 
@@ -243,12 +248,14 @@ same interface next.
   third value the Ex1 `dto.EventStatus` enum was deliberately left room for.)*
 - **Order Book:** independent bid/ask book per option; a submitted order matches against the
   book by price-time priority, can partially fill across multiple resting orders, and any
-  unmatched remainder rests in the book. Max order price is `d - 0.01`. **Mint:** when
-  opposing bid+ask together reach or exceed `d`, new shares are minted for both sides — take
-  the min of the two requested quantities; if the combined price exceeds `d`, the resting
-  order fills at its full stated price while the incoming order fills at the complementary
-  price (`d` minus the resting order's price). Full worked examples in
-  ` docs-reference/order-book-appendix.md`.
+  unmatched remainder rests in the book. Max order price is `d - 0.01`. **Mint:** two **BUY**
+  orders on *opposite options* (never a bid+ask on the same option — that's ordinary
+  matching's job), whose prices together reach or exceed `d`, mint new shares for both sides
+  — take the min of the two requested quantities; if the combined price exceeds `d`, the
+  resting order fills at its full stated price while the incoming order fills at the
+  complementary price (`d` minus the resting order's price). Ordinary same-option matching
+  always runs first; mint only applies to whatever quantity is left. Full worked examples
+  and the implementation trace in ` docs-reference/order-book-appendix.md`.
 - **Commission:** unchanged mechanics from Ex1 (`on-purchase` charged to the buyer
   immediately; `on-close` charged to winners at settlement) — now applies uniformly whether
   the event is LMSR or Order Book.
@@ -354,36 +361,111 @@ up with how Ex1's own `EventsFileLoader` already chose plain DOM over JAXB for t
 reason. Default is a hand-written CSS file; revisit only after explicit confirmation.
 
 **Open items to confirm / flag in the README rather than silently assume:**
-1. Negative-balance mechanics for Order Book (Section 4) — lecturer's recording doesn't add
-   detail beyond confirming every user has an account/initial balance; stays our own
-   documented interpretation (transaction completes, block applies after).
-2. Whether leftover Order Book event-account funds return to the MM at close, same as LMSR
-   — lecturer's recording defers to the written spec/simulation, neither of which actually
-   covers this either (double-checked directly in the docx, not just assumed). Genuinely
-   unresolved — worth a direct forum question.
-3. **What happens to resting/unmatched Order Book orders when their event closes** — NEW,
-   found while re-verifying NotebookLM's claim that this is "in the written spec": it is
-   **not** — checked the docx directly (every "ממתינות/resting" mention is already captured
-   in `order-book-appendix.md`, none address close-time behavior). Genuinely unresolved,
-   not just uninvestigated — worth a direct forum question, same category as item 2.
-4. **Order Book close — architectural note for whenever it's implemented**, surfaced while
-   fixing the equivalent LMSR bug (winners never being paid, engine/PROGRESS_LOG entry
-   covers it): LMSR's fix determines each winner by replaying `Trade.buyerUsername` across
-   trade history, which works *only* because LMSR has no sell — trade history and final
-   holdings are the same thing. **Order Book is different: users can sell**, so net holdings
-   don't equal accumulated buy history. OB close must pay out from
-   `OptionBook.holdings` (the already-maintained per-user net-position map), not by
-   replaying trade history — do not copy the LMSR approach directly when this gets built.
-   Also still applies here: whether `ON_CLOSE` commission is even supported for Order Book
-   trades (deferred, unimplemented per the Order Book core stage), and the same
-   blocked-user-should-auto-unblock-on-credit principle LMSR's fix established.
-4. ~~Packaging~~ — **resolved**, see Section 1: only the JavaFX module's JAR ships.
-5. ~~JavaFX version~~ — **resolved in practice**: 25.0.4 in use; lecturer's recording says
+1. ~~Negative-balance mechanics for Order Book~~ — **confirmed twice now**: once directly in
+   the spec text, and again by the lecturer's own forum reply. No action needed.
+2. **Resolved — confirmed directly by the lecturer (forum reply, citing Appendix B's own
+   commission section), and it reverses something already shipped as code, not just a
+   documentation note.** Quote (paraphrased): "the commission must be paid directly to the
+   MM's account (not the event's account) — it's a fee for the service the MM provides in
+   managing the event." This is `on-purchase` commission, collected in real time as each
+   fill happens — not a one-time close-time computation. **This means `OrderBookExecutor`'s
+   existing, already-tested commission handling is wrong and needs a real fix**: it
+   currently credits the fill's commission into `event.getMarketMakerAccount()` (mirroring
+   how `TradeExecutor.participate` does it for LMSR) — it should instead credit
+   `users.get(event.getMarketMakerUsername())` directly (`User.credit`, already exists from
+   the core stage's seller-payment code), bypassing the event account entirely. Keep calling
+   `MarketMakerAccount.addCommissionCollected()` for the running *display counter*
+   (`EventStatusDto.totalCommissionCollected` is still meaningful information) — just stop
+   calling `MarketMakerAccount.credit()` for the money itself. **This also fully resolves
+   item 3 below as a side effect**: if commission never enters the event account in the
+   first place, there's nothing left to debate about what happens to it at close — the
+   account holds pure principal (initial allocation + mint) only, which the existing
+   `d`-per-share-drains-to-zero math (item 4) already handles cleanly with zero remaining
+   ambiguity.
+   **Scope check, not yet confirmed:** the lecturer's answer cited Appendix B specifically
+   (Order Book's own appendix) — this note does **not** assume LMSR's already-implemented,
+   already-tested (46 tests) commission handling is also wrong. LMSR's behavior was verified
+   separately against its own specific spec passages (the "collect commission at the lock
+   stage" and "leftover also returns to MM" sentences), and functionally lands on the same
+   *end state* either way (commission reaches the MM's personal balance by the time
+   `close()` returns, whether via direct credit or via the account-then-sweep path
+   `TradeExecutor.close` already uses) — there is no *observable* mid-trading difference for
+   LMSR the way there is for Order Book (whose trading phase can span many separate fills
+   with no single "close" event settling everything at once). Not touching LMSR without an
+   explicit reason; worth a quick confirming follow-up question if sending others anyway.
+3. ~~What happens to resting/unmatched Order Book orders at close~~ — confirmed directly by
+   the lecturer: "they disappear as if they never existed — no longer relevant, since
+   trading has stopped for that stock." Matches the existing (non-)implementation exactly —
+   `closeEvent` for Order Book is still just a guard, so there was never any resting-order
+   handling to begin with; none is needed now either.
+4. **Order Book close — architectural note, simplified by item 2's resolution.** Pay out
+   from `OptionBook.holdings` (not by replaying `Trade.buyerUsername`, which only works for
+   LMSR since it has no sell). Pay exactly `d` per winning share held to each holder. **No
+   commission carve-out needed at close anymore** — per item 2, `on-purchase` commission
+   never reaches the event account in the first place, and `on-close` commission (still
+   unimplemented for Order Book) would credit the MM directly at close time the same way, so
+   the account should hold pure principal only and drain to exactly zero by construction,
+   with no ambiguity left to resolve. Assert that precisely in tests, the same way LMSR's
+   fix did. Also still applies: whether `on-close` is even reachable yet (deferred,
+   unimplemented per the Order Book core stage), and the same
+   blocked-user-auto-unblocks-on-credit principle LMSR's fix already established.
+5. ~~Self-trading in the Order Book (including self-mint)~~ — **confirmed directly by the
+   lecturer**: "an interesting edge case, but not one that will be tested — technically
+   nothing in the system's requirements prevents it, so there's no reason for you to prevent
+   it either (moral failings aside)." Matches the existing default (allowed, not blocked)
+   exactly, for both ordinary self-trades and self-mint. No change needed anywhere.
+6. ~~Packaging~~ — **resolved**, see Section 1: only the JavaFX module's JAR ships.
+7. ~~JavaFX version~~ — **resolved in practice**: 25.0.4 in use; lecturer's recording says
    separate setup guides are coming, revisit only if those say otherwise.
-6. Third-party JavaFX libraries (e.g. AtlantaFX) — lecturer's recording doesn't mention any
+8. Third-party JavaFX libraries (e.g. AtlantaFX) — lecturer's recording doesn't mention any
    by name or require approval, and explicitly says grading is functionality-only with
    freedom of choice on components/tools. This *weakens* the earlier caution, but doesn't
    fully resolve it either ("freedom of choice" is generic, may just mean widget choice, not
    necessarily "any Maven dependency"). Since the self-written CSS baseline already works
    and grading doesn't reward polish either way, there's no real upside to revisiting this
    now — staying with zero dependencies remains the lower-risk default.
+9. **Commission on mint — no explicit spec confirmation, our own assumption.** Default: no
+   commission on a mint fill (matches `order-book-appendix.md`'s own leaning — a mint isn't
+   a trade between two existing parties, new shares are being created — while explicitly
+   flagging that reading as unconfirmed there too). Also the only choice that keeps the
+   exact-`d`-per-pair account-crediting invariant clean without extra bookkeeping; charging
+   commission would break "both payments sum to exactly `d`." Flag as a README assumption.
+10. **Mint vs. ordinary-matching order — our own interpretation, not stated explicitly.**
+    Ordinary same-option matching always runs to completion first; mint only applies to
+    whatever quantity remains. Justified structurally, not just by reading order: the two
+    mechanisms consult disjoint books (same-option opposite-side vs. cross-option same-side),
+    and neither can add liquidity to the book the other reads mid-flight — so a single
+    sequential pass is complete, not just simpler. Flag as a README assumption.
+
+---
+
+## 9. UI Polish Backlog — deferred wording/display fixes, for the polish stage
+
+Not implemented now (functionality first, per the confirmed functionality-only grading) —
+collected here as they're found during manual testing, so nothing gets forgotten by the time
+this stage actually starts:
+
+- The Order Book "Order Submitted" confirmation dialog reads confusingly for a resting
+  (unfilled) order — "Filled: 0.00" reads as if nothing happened / something failed, when
+  the order was actually accepted and is resting. Reword for the zero-fill case — e.g. "Buy
+  request submitted for a total of..." rather than leading with "Filled: 0.00."
+- Text truncation: stat lines (e.g. "SPREAD: ...") and some labels get cut off at default
+  window width — needs either narrower formatting, wrapping, or a wider default window size.
+- The window sometimes opens with content cut off / not fully rendered until interacted
+  with or resized — worth checking whether this is a real layout bug or just an initial
+  sizing default worth adjusting.
+- **Not purely cosmetic — a real (rare) precision edge case:** the Order Book submit form's
+  price `TextField` accepts any parseable double, including more than 2 decimal places
+  (e.g. a user typing `0.333`). The mint stage's exact-`d` invariant
+  (`restingPrice + complementaryPrice == d`) assumes prices are cent-precise; an
+  untruncated resting price could leave the sum a fraction of a cent off `d`. Low
+  likelihood in practice (every other price in this app is 2-decimal by convention/display),
+  but worth adding input validation/rounding to exactly 2 decimals on this field specifically
+  once back in polish mode — don't fix silently mid-Order-Book-stage.
+- The three Events-list filter `ComboBox`es (Stage 6) are enabled from app startup, before
+  any file is loaded — touching one before loading shows an error alert ("No events file
+  has been loaded yet"), accurate but a slightly odd first-touch experience. Deliberately
+  left as-is: the message is already correct (unlike the Open/Buy/Close cases that needed
+  fixing), and gating it cleanly would need new "is a file loaded" observable state that
+  doesn't exist in the current pull-based `IEngine` design — real architecture work, not a
+  small guard. Revisit only if there's spare time in the polish stage.
