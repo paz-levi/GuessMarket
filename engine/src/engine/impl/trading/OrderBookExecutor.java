@@ -194,7 +194,15 @@ public final class OrderBookExecutor {
         buyer.debit(value + commission);
         seller.credit(value);
         if (commission > 0) {
-            event.getMarketMakerAccount().credit(commission);
+            // Lecturer-confirmed (forum reply quoting Appendix B): on-purchase commission for an ordinary fill
+            // credits the MM's own personal balance directly, in real time -- unlike LMSR, which credits the event
+            // account (TradeExecutor.participate). addCommissionCollected still tracks the running total either way;
+            // it's a display-only counter, not the money itself. Null-check mirrors
+            // TradeExecutor.returnLeftoverSubsidyToMarketMaker's identical "resolve MM by username" pattern.
+            User marketMaker = users.get(event.getMarketMakerUsername());
+            if (marketMaker != null) {          // defensive; EventsFileLoader guarantees this in practice
+                marketMaker.credit(commission);
+            }
             event.getMarketMakerAccount().addCommissionCollected(commission);
         }
 

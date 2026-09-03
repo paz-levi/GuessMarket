@@ -32,6 +32,9 @@ class OrderBookExecutorTest {
     private static final double DELTA = 1e-9;
     private static final int D = 1;
     private static final double START_BALANCE = 1000.0;
+    // Distinct from every trader name (Zoe/Bob/Carol/Alice) so a commission credit never entangles with an
+    // unrelated test's trader-balance assertion.
+    private static final String MARKET_MAKER_NAME = "MarketMaker";
 
     // The appendix's Section 4 walk-through, asserted fill by fill. YES book holds Bob 20 @ $0.50 and Carol 15 @ $0.48;
     // Zoe sells 30 @ $0.45 and should walk both, each at the RESTING order's price, netting $14.80 -- better than her floor.
@@ -155,10 +158,13 @@ class OrderBookExecutorTest {
         double value = 20 * 0.50;
         double commission = value * 0.10;
         assertEquals(commission, fills.get(0).getCommissionPaid(), DELTA);
-        // Seller receives the gross; buyer pays value + commission; the event account collects the commission.
+        // Seller receives the gross; buyer pays value + commission; the MM's own personal balance collects the
+        // commission directly (lecturer-confirmed destination for Order Book on-purchase commission -- unlike
+        // LMSR, which credits the event account instead).
         assertEquals(START_BALANCE + value, fixture.balanceOf("Zoe"), DELTA);
         assertEquals(START_BALANCE - (value + commission), fixture.balanceOf("Bob"), DELTA);
-        assertEquals(commission, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(0.0, fixture.event.getMarketMakerAccount().getBalance(), DELTA); // untouched by ordinary fills
+        assertEquals(START_BALANCE + commission, fixture.balanceOf(MARKET_MAKER_NAME), DELTA);
         assertEquals(commission, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
     }
 
@@ -174,6 +180,25 @@ class OrderBookExecutorTest {
         assertEquals(0.0, fills.get(0).getCommissionPaid(), DELTA);
         assertEquals(0.0, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
         assertEquals(START_BALANCE - 10.0, fixture.balanceOf("Bob"), DELTA);
+    }
+
+    // System-wide conservation for an ordinary fill's on-purchase commission, now that it lands on the MM
+    // personally instead of the event account: nothing is created or destroyed, just redirected to a different
+    // destination than before this fix.
+    @Test
+    void ordinaryFillOnPurchaseCommissionConservesTotalMoneyLandingOnMarketMakerInstead() {
+        Fixture fixture = new Fixture(15, CommissionMode.ON_PURCHASE);
+        fixture.giveShares("Zoe", 1, 20);
+        fixture.restBid("Bob", 1, 20, 0.50);
+        double totalBefore = fixture.balanceOf("Zoe") + fixture.balanceOf("Bob")
+                + fixture.balanceOf(MARKET_MAKER_NAME) + fixture.event.getMarketMakerAccount().getBalance();
+
+        fixture.submit("Zoe", 1, OrderSide.SELL, 20, 0.45);
+
+        double totalAfter = fixture.balanceOf("Zoe") + fixture.balanceOf("Bob")
+                + fixture.balanceOf(MARKET_MAKER_NAME) + fixture.event.getMarketMakerAccount().getBalance();
+        assertEquals(totalBefore, totalAfter, DELTA);
+        assertEquals(0.0, fixture.event.getMarketMakerAccount().getBalance(), DELTA); // untouched by ordinary fills
     }
 
     // The price ceiling is d - 0.01. With d = 1 that's exactly $0.99, which must still be accepted.
@@ -278,9 +303,12 @@ class OrderBookExecutorTest {
         assertTrue(fixture.book(1).getBids().isEmpty());
         assertTrue(fixture.book(1).getAsks().isEmpty());
 
-        // The commission genuinely left the system for her and landed on the MM account -- not evaporated, not
-        // duplicated. System-wide conservation (Zoe's loss == the account's gain) holds even for a self-trade.
-        assertEquals(commission, fixture.event.getMarketMakerAccount().getBalance(), DELTA);
+        // The commission genuinely left the system for her and landed on the MM's own personal balance -- lecturer-
+        // confirmed destination for Order Book on-purchase commission, unlike LMSR (which credits the event
+        // account). Not evaporated, not duplicated: system-wide conservation (Zoe's loss == the MM's gain) holds
+        // even for a self-trade.
+        assertEquals(0.0, fixture.event.getMarketMakerAccount().getBalance(), DELTA); // untouched by ordinary fills
+        assertEquals(START_BALANCE + commission, fixture.balanceOf(MARKET_MAKER_NAME), DELTA);
         assertEquals(commission, fixture.event.getMarketMakerAccount().getTotalCommissionCollected(), DELTA);
     }
 
@@ -521,9 +549,11 @@ class OrderBookExecutorTest {
                     new EventOption("Yes"), new EventOption("No"),
                     commissionRate, commissionMode, 0, new MarketMakerAccount(0.0),
                     EventStatus.ACTIVE, TradingMethod.ORDER_BOOK, market);
+            event.assignMarketMaker(MARKET_MAKER_NAME); // a genuinely loaded event always has one; also lets
+                                                          // on-purchase-commission tests observe where it lands
             // Alice added for the mint tests, matching the appendix's own naming (Carol/Alice) so a reader can
             // check a test straight against the worked example without a name-mapping step.
-            for (String name : List.of("Zoe", "Bob", "Carol", "Alice")) {
+            for (String name : List.of("Zoe", "Bob", "Carol", "Alice", MARKET_MAKER_NAME)) {
                 users.put(name, new User(name, START_BALANCE));
             }
         }

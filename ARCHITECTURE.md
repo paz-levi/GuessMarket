@@ -809,9 +809,10 @@ prices from whatever counterparties are actually resting. All three classes are 
     against the appendix's own numbers, where the seller receives the full gross. Charged only
     under `ON_PURCHASE`; `ON_CLOSE` settles at close instead.
   - **Unlike LMSR, the event account is not the counterparty** — money moves peer-to-peer
-    between the two users, and `MarketMakerAccount` only ever sees commission (plus the MM's
-    `initial` at open). A fill also **never changes share supply**; it only transfers existing
-    holdings between users.
+    between the two users. `MarketMakerAccount` sees the MM's `initial` at open and a mint's
+    exact-`d`-per-pair credit (see below), but **not** ordinary-fill commission — see the
+    lecturer-confirmed fix noted after the mint paragraph below. A fill also **never changes
+    share supply**; it only transfers existing holdings between users.
   - **Validation, all before any mutation:** option number 1 or 2, positive quantity, price in
     `(0, d - 0.01]`, and — for a sell — that the seller actually holds the shares. That last
     one isn't in CLAUDE.md's exception list but protects a real invariant: without it a naked
@@ -833,8 +834,9 @@ prices from whatever counterparties are actually resting. All three classes are 
     automatically safe") — now verified directly, not just trusted, by
     `selfTradeNetsSharesAndMoneyCorrectlyForTheSameUser`: holdings net back to exactly the
     trader's starting position (a `+quantity` and `-quantity` on the same username cancel), and
-    under `ON_PURCHASE` the only real balance effect is losing the commission to the MM account
-    — she pays herself the share value and gets it back, but still pays commission on it.
+    under `ON_PURCHASE` the only real balance effect is losing the commission to the MM
+    personally — she pays herself the share value and gets it back, but still pays commission
+    on it.
   - **Mint stage: peer-to-peer share creation, new `mintAgainstOppositeOption`.** Runs after
     ordinary same-option matching is exhausted on the incoming order (never interleaved — the
     two consult disjoint books, and neither can add liquidity the other would need to
@@ -871,6 +873,25 @@ prices from whatever counterparties are actually resting. All three classes are 
     sides, so it gets its own dedicated test), a mint pushing a participant negative and
     blocking them afterward, system-wide conservation, and zero commission collected even
     under a nonzero `ON_PURCHASE` rate.
+  - **Bug fix, 2026-09-03: on-purchase commission now credits the MM personally, not the event
+    account.** Lecturer-confirmed via forum reply quoting Appendix B's own commission section —
+    a real behavior difference from LMSR (`TradeExecutor.participate` correctly credits the
+    event account per LMSR's own rules), which `executeFill`'s original code had incorrectly
+    mirrored for Order Book. Fix is scoped to `executeFill`'s ordinary-matching path only:
+    `users.get(event.getMarketMakerUsername())` is credited directly instead of
+    `event.getMarketMakerAccount()`, with the same defensive null-check
+    `TradeExecutor.returnLeftoverSubsidyToMarketMaker` already uses for the identical
+    "resolve MM by username, credit them" shape. `addCommissionCollected(...)` is unaffected —
+    it's a display-only running total (`EventStatusDto.totalCommissionCollected`), not money
+    movement. `mintAgainstOppositeOption` is untouched and remains correct: it charges no
+    commission at all (CLAUDE.md Section 8 item 9), so this fix doesn't apply to it. Verified by
+    updating the two existing tests that asserted the old (event-account) destination
+    (`onPurchaseCommissionIsChargedToTheBuyerNotTheIncomingSeller`,
+    `selfTradeNetsSharesAndMoneyCorrectlyForTheSameUser`) plus a new dedicated conservation test,
+    `ordinaryFillOnPurchaseCommissionConservesTotalMoneyLandingOnMarketMakerInstead`. The test
+    `Fixture` previously never assigned an MM at all (`getMarketMakerUsername()` was `null` in
+    every test) — now assigns a dedicated `MARKET_MAKER_NAME` distinct from every trader name,
+    both fixing that latent gap and letting these tests observe where the money actually lands.
 
 ### `engine.impl.state` package
 
