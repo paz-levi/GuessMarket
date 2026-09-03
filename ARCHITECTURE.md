@@ -1507,6 +1507,10 @@ decided explicitly at submission time rather than folded silently into a refacto
   this class — `run.bat` therefore still launches the console UI; this class is currently only
   reachable via a direct `java ... ui.GuessMarketApp` invocation for manual verification, until
   a later step retires `ui.Main` and flips the manifest over.
+- **Stage 6 (resize correctness):** `setMinWidth(640)`/`setMinHeight(420)` added right after
+  `setResizable(true)` — roughly 2/3 of the 960×640 initial size, a practical floor (a
+  judgment call, not a spec number) so the window can't be dragged down to near-zero, while
+  `resizable` itself stays untouched (already correct — see above).
 
 #### `MainViewController` (`ui/src/ui/MainViewController.java` → now `gui/src/gui/MainViewController.java`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** `MainView.fxml`'s controller class (`fx:controller="ui.MainViewController"`),
@@ -1599,6 +1603,24 @@ decided explicitly at submission time rather than folded silently into a refacto
   and an Order Book event loaded from the same file — first confirming the (too-broad) all-four
   hidden, then confirming the refined behavior: no `"price "` text anywhere in the Order Book
   event's rendering, but both `shares` lines and both account lines present in both cases.
+- **Stage 6 (resize correctness):** root cause of the truncation backlog items (CLAUDE.md
+  Section 9) traced to a plain `Label`'s default minimum width equalling its full unwrapped
+  text — once `ScrollPane.fitToWidth="true"` clamps a panel's width on resize, a long line
+  simply clips instead of reflowing, since there's no horizontal-scroll escape hatch.
+  `setWrapText(true)` changes what a `Label` reports as its own minimum (down to its longest
+  word), which lets JavaFX's ordinary min/preferred layout mechanism wrap it instead. New
+  package-private static `wrappingLabel(String)` (alongside the existing `formatMoney`/
+  `formatCommissionMode` helpers `OrderBookPanelBuilder` already reused) wraps a `new Label` +
+  `setWrapText(true)` in one call; applied to every genuinely unbounded/multi-field label —
+  the balance badge, the `NOT_STARTED`/`CLOSED` placeholders, the six-line event-status block,
+  the winner line, trade-history rows — while short, bounded labels (section headers, empty-
+  state placeholders, "Buying as: X") are left as plain `Label`s. All 28 `Label` construction
+  sites across `gui/` were individually re-checked before deciding which category each falls
+  into, not assumed from a pattern. No `ScrollPane` was missing anywhere (`eventDetailsBox`/
+  `userDetailsBox` already wrap their content, and every dynamically-built sub-panel — the
+  Order Book panel, the Users tab's per-event sub-panel — is added as a child of one of those
+  two, inheriting the wrap for free) — this stage is purely about labels reflowing correctly
+  within panels that already scrolled.
 
 #### `OrderBookPanelBuilder` (`gui/src/gui/OrderBookPanelBuilder.java`) — Order Book order-submission-UI stage, new
 - **What it is:** The Order Book event-detail panel — both options' order books side by side,
@@ -1681,6 +1703,12 @@ decided explicitly at submission time rather than folded silently into a refacto
     events" / "No events file has been loaded yet."). No crash; left as-is rather than adding
     disable-until-loaded binding, since the existing catch already handles it gracefully and
     this is a rarely-hit edge (why touch a filter before loading anything?).
+  - **Stage 6 (resize correctness):** all three of its `Label` rows that carry unbounded or
+    multi-field content — the LAST/BID/ASK/MID/SPREAD stats line, each resting-order row, each
+    participant row — now go through `MainViewController.wrappingLabel(String)` instead of
+    `new Label(...)`. Short, bounded labels (headers, placeholders) are untouched. See
+    `MainViewController`'s own Stage 6 note below for the root cause and why this is
+    structural, not cosmetic.
 
 #### `MainView.fxml` (`ui/resources/ui/MainView.fxml` → now `gui/resources/gui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +

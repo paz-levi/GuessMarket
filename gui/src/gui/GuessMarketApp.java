@@ -37,6 +37,10 @@ public class GuessMarketApp extends Application {
         primaryStage.setScene(scene);
         // Explicitly not disabled — CLAUDE.md's resize rule forbids using resizable=false as a workaround.
         primaryStage.setResizable(true);
+        // A sane practical floor only, not a spec number -- roughly 2/3 of the initial size, so the window can't be
+        // dragged down to near-zero while still allowing real shrinking (which the wrapText labels below rely on).
+        primaryStage.setMinWidth(640);
+        primaryStage.setMinHeight(420);
         primaryStage.show();
     }
 }

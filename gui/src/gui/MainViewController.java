@@ -225,7 +225,7 @@ public class MainViewController {
     // per-event sub-panel (details + participate form) driven by whichever participation gets selected. If
     // eventIdToReselect is non-null, that participation is re-selected programmatically after rebuilding the list.
     private void renderUserDetails(UserDetailDto detail, Integer eventIdToReselect) {
-        Label balanceLabel = new Label("Balance: " + formatMoney(detail.balance()) + (detail.blocked() ? "  (BLOCKED)" : ""));
+        Label balanceLabel = wrappingLabel("Balance: " + formatMoney(detail.balance()) + (detail.blocked() ? "  (BLOCKED)" : ""));
         balanceLabel.getStyleClass().add("balance-badge");
         HBox balanceBadge = new HBox(balanceLabel);
         balanceBadge.setAlignment(Pos.CENTER_RIGHT);
@@ -310,9 +310,9 @@ public class MainViewController {
             case NOT_STARTED -> fixedUsername == null
                     ? buildOpenEventForm(status.eventId(), onSuccess)
                     // The Users tab deliberately has no Open control (scoped to the Events tab), so it just explains why.
-                    : new VBox(new Label("This event has not been opened yet — its market maker can open it from the Events tab."));
+                    : new VBox(wrappingLabel("This event has not been opened yet — its market maker can open it from the Events tab."));
             case ACTIVE -> buildActiveControls(status, fixedUsername, onSuccess);
-            case CLOSED -> new VBox(new Label("This event is closed and no longer accepts trades."));
+            case CLOSED -> new VBox(wrappingLabel("This event is closed and no longer accepts trades."));
         };
     }
 
@@ -410,15 +410,15 @@ public class MainViewController {
     private static void appendEventStatusDisplay(VBox container, EventStatusDto status) {
         boolean isLmsr = status.tradingMethod() == TradingMethod.LMSR;
         container.getChildren().addAll(
-                new Label(status.eventName() + "  (id " + status.eventId() + ")  —  " + status.status()),
-                new Label("Market Maker: " + status.marketMakerUsername()),
-                new Label(formatOptionLine(status.optionOneName(), status.optionOnePrice(), status.optionOneShares(), isLmsr)),
-                new Label(formatOptionLine(status.optionTwoName(), status.optionTwoPrice(), status.optionTwoShares(), isLmsr)),
-                new Label("Market maker balance: " + formatMoney(status.marketMakerBalance())),
-                new Label("Total commission collected: " + formatMoney(status.totalCommissionCollected()))
+                wrappingLabel(status.eventName() + "  (id " + status.eventId() + ")  —  " + status.status()),
+                wrappingLabel("Market Maker: " + status.marketMakerUsername()),
+                wrappingLabel(formatOptionLine(status.optionOneName(), status.optionOnePrice(), status.optionOneShares(), isLmsr)),
+                wrappingLabel(formatOptionLine(status.optionTwoName(), status.optionTwoPrice(), status.optionTwoShares(), isLmsr)),
+                wrappingLabel("Market maker balance: " + formatMoney(status.marketMakerBalance())),
+                wrappingLabel("Total commission collected: " + formatMoney(status.totalCommissionCollected()))
         );
         if (status.winningOptionName() != null) {
-            container.getChildren().add(new Label("Winner: " + status.winningOptionName()));
+            container.getChildren().add(wrappingLabel("Winner: " + status.winningOptionName()));
         }
         container.getChildren().add(new Separator());
         container.getChildren().add(buildTradeHistorySection(status.tradeHistory()));
@@ -437,7 +437,7 @@ public class MainViewController {
             section.getChildren().add(new Label("No trades yet."));
         } else {
             for (TradeRecordDto trade : tradeHistory) {
-                section.getChildren().add(new Label(trade.optionName() + ": " + formatMoney(trade.quantity())
+                section.getChildren().add(wrappingLabel(trade.optionName() + ": " + formatMoney(trade.quantity())
                         + " share(s) @ " + formatMoney(trade.pricePerShare())
                         + ", commission " + formatMoney(trade.commissionPaid())
                         + ", total " + formatMoney(trade.totalPaid())
@@ -591,6 +591,15 @@ public class MainViewController {
     // Package-private: also called from OrderBookPanelBuilder, for the same values (quantities and prices alike).
     static String formatMoney(double value) {
         return String.format(Locale.US, "%.2f", value);
+    }
+
+    // Package-private: also called from OrderBookPanelBuilder. A plain Label's minimum width equals its full
+    // unwrapped text width, so a long line simply clips once its container is squeezed narrower by a resize --
+    // wrapText lets it reflow onto more lines instead, which CLAUDE.md's resize rule requires.
+    static Label wrappingLabel(String text) {
+        Label label = new Label(text);
+        label.setWrapText(true);
+        return label;
     }
 
     // Shows a plain Alert for any background-task or engine-call failure — functional only, wording/styling is a later step.

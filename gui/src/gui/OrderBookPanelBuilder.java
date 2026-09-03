@@ -53,7 +53,7 @@ final class OrderBookPanelBuilder {
 
     // One option's book: its name, the LAST/BID/ASK/MID/SPREAD stats line, and its resting bids/asks.
     private static VBox buildOptionBookPanel(OrderBookSnapshotDto book) {
-        Label statsLine = new Label("LAST: " + formatNullableMoney(book.lastPrice())
+        Label statsLine = MainViewController.wrappingLabel("LAST: " + formatNullableMoney(book.lastPrice())
                 + "  BID: " + formatNullableMoney(book.bidPrice())
                 + "  ASK: " + formatNullableMoney(book.askPrice())
                 + "  MID: " + formatNullableMoney(book.midPrice())
@@ -74,7 +74,7 @@ final class OrderBookPanelBuilder {
             section.getChildren().add(new Label(emptyText));
         } else {
             for (OrderDto order : orders) {
-                section.getChildren().add(new Label(formatOrderRow(order)));
+                section.getChildren().add(MainViewController.wrappingLabel(formatOrderRow(order)));
             }
         }
         return section;
@@ -93,7 +93,7 @@ final class OrderBookPanelBuilder {
             section.getChildren().add(new Label("No participants yet."));
         } else {
             for (ParticipantDto participant : participants) {
-                section.getChildren().add(new Label(formatParticipantRow(participant)));
+                section.getChildren().add(MainViewController.wrappingLabel(formatParticipantRow(participant)));
             }
         }
         return section;

@@ -449,11 +449,18 @@ this stage actually starts:
   (unfilled) order — "Filled: 0.00" reads as if nothing happened / something failed, when
   the order was actually accepted and is resting. Reword for the zero-fill case — e.g. "Buy
   request submitted for a total of..." rather than leading with "Filled: 0.00."
-- Text truncation: stat lines (e.g. "SPREAD: ...") and some labels get cut off at default
-  window width — needs either narrower formatting, wrapping, or a wider default window size.
+- ~~Text truncation: stat lines (e.g. "SPREAD: ...") and some labels get cut off at default
+  window width~~ — **resolved, Stage 6 (resize correctness).** Root cause was structural, not
+  cosmetic: a plain `Label`'s minimum width equals its full unwrapped text, so a squeezed
+  ancestor clips it instead of reflowing. New `MainViewController.wrappingLabel(String)`
+  helper (`setWrapText(true)`) applied to every genuinely unbounded/multi-field label — the
+  status-display block, trade-history rows, the OB stats/order/participant rows — while short,
+  bounded labels (headers, placeholders) are left alone. See `ARCHITECTURE.md`.
 - The window sometimes opens with content cut off / not fully rendered until interacted
-  with or resized — worth checking whether this is a real layout bug or just an initial
-  sizing default worth adjusting.
+  with or resized — investigated during Stage 6; no confirmed in-app root cause found. The
+  new `setMinWidth`/`setMinHeight` guard (below) is the one plausible low-risk mitigation, but
+  this may be a platform/driver-level timing quirk — **not marked resolved, re-check
+  specifically during Stage 6's manual resize testing.**
 - **Not purely cosmetic — a real (rare) precision edge case:** the Order Book submit form's
   price `TextField` accepts any parseable double, including more than 2 decimal places
   (e.g. a user typing `0.333`). The mint stage's exact-`d` invariant
