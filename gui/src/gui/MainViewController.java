@@ -1,6 +1,7 @@
 package gui;
 
 import java.io.File;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
@@ -19,6 +20,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Separator;
+import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
@@ -46,6 +48,10 @@ public class MainViewController {
     // Artificial delay so the ProgressIndicator is visible even though the real load is fast — per CLAUDE.md's FileChooser/Task rule.
     private static final int ARTIFICIAL_DELAY_MS = 1500;
 
+    // Trade-history rows show hour:minute only, not the raw LocalDateTime's full ISO-8601-with-microseconds --
+    // matching every other clean-formatting convention already used in this app (e.g. 2-decimal money).
+    private static final DateTimeFormatter TRADE_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
+
     @FXML
     private Button loadFileButton;
 
@@ -71,10 +77,22 @@ public class MainViewController {
     private VBox eventDetailsBox;
 
     @FXML
+    private SplitPane eventsSplitPane;
+
+    @FXML
+    private Label eventsNoFileLabel;
+
+    @FXML
     private ListView<UserSummaryDto> usersListView;
 
     @FXML
     private VBox userDetailsBox;
+
+    @FXML
+    private SplitPane usersSplitPane;
+
+    @FXML
+    private Label usersNoFileLabel;
 
     // Package-private (not private): OrderBookPanelBuilder, a separate class in this same package, needs it.
     IEngine engine;
@@ -105,8 +123,8 @@ public class MainViewController {
         // any selectedItemProperty listener below. selectFirst() only notifies listeners already registered at the
         // moment it runs; since none exist yet during population, the initial "All" selection cannot trigger
         // refreshEventsList() at startup, before any file is loaded.
-        populateFilterComboBox(methodFilterComboBox, TradingMethod.values(), "All", TradingMethod::toString);
-        populateFilterComboBox(statusFilterComboBox, EventStatus.values(), "All", EventStatus::toString);
+        populateFilterComboBox(methodFilterComboBox, TradingMethod.values(), "All", MainViewController::formatTradingMethod);
+        populateFilterComboBox(statusFilterComboBox, EventStatus.values(), "All", MainViewController::formatStatus);
         populateFilterComboBox(commissionFilterComboBox, CommissionMode.values(), "All", MainViewController::formatCommissionMode);
 
         methodFilterComboBox.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> refreshEventsList());
@@ -160,6 +178,7 @@ public class MainViewController {
 
         loadTask.setOnSucceeded(event -> {
             filePathLabel.setText(path);
+            revealLoadedContent();
             refreshEventsList();
             refreshUsersList();
         });
@@ -168,6 +187,20 @@ public class MainViewController {
         Thread thread = new Thread(loadTask, "load-events-file");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    // Swaps each tab's "No file loaded" placeholder for its real content (filter bar included, so nothing in it
+    // is interactable before a file loads at all). Idempotent -- safe to call on every successful load, not just
+    // the first, so no extra "have we loaded before" state is needed anywhere.
+    private void revealLoadedContent() {
+        eventsSplitPane.setVisible(true);
+        eventsSplitPane.setManaged(true);
+        eventsNoFileLabel.setVisible(false);
+        eventsNoFileLabel.setManaged(false);
+        usersSplitPane.setVisible(true);
+        usersSplitPane.setManaged(true);
+        usersNoFileLabel.setVisible(false);
+        usersNoFileLabel.setManaged(false);
     }
 
     // Re-reads the event list from the engine, filtered by the three filter ComboBoxes' current selections, and
@@ -225,7 +258,7 @@ public class MainViewController {
     // per-event sub-panel (details + participate form) driven by whichever participation gets selected. If
     // eventIdToReselect is non-null, that participation is re-selected programmatically after rebuilding the list.
     private void renderUserDetails(UserDetailDto detail, Integer eventIdToReselect) {
-        Label balanceLabel = wrappingLabel("Balance: " + formatMoney(detail.balance()) + (detail.blocked() ? "  (BLOCKED)" : ""));
+        Label balanceLabel = wrappingLabel("Balance: " + formatDollars(detail.balance()) + (detail.blocked() ? "  (BLOCKED)" : ""));
         balanceLabel.getStyleClass().add("balance-badge");
         HBox balanceBadge = new HBox(balanceLabel);
         balanceBadge.setAlignment(Pos.CENTER_RIGHT);
@@ -248,12 +281,17 @@ public class MainViewController {
             }
         });
 
+        Label participationHeader = new Label("Events Participation / Owner:");
+        participationHeader.getStyleClass().add("section-header");
+        Label singleEventHeader = new Label("Single event details and trade:");
+        singleEventHeader.getStyleClass().add("section-header");
+
         userDetailsBox.getChildren().setAll(
                 balanceBadge,
-                new Label("Events Participation / Owner:"),
+                participationHeader,
                 participationListView,
                 new Separator(),
-                new Label("Single event details and trade:"),
+                singleEventHeader,
                 singleEventDetailsBox
         );
 
@@ -344,8 +382,9 @@ public class MainViewController {
         closeButton.setOnAction(event -> handleCloseEventClick(eventId, usernameComboBox, winningOptionComboBox,
                 optionOneName, onSuccess));
 
-        return new VBox(6, new Label("Close this event (market maker only):"),
-                new HBox(8, usernameComboBox, winningOptionComboBox, closeButton));
+        Label header = new Label("Close this event (market maker only):");
+        header.getStyleClass().add("section-header");
+        return new VBox(6, header, new HBox(8, usernameComboBox, winningOptionComboBox, closeButton));
     }
 
     // Closes the event via the existing IEngine.closeEvent, then redraws through the caller's own callback and
@@ -376,8 +415,9 @@ public class MainViewController {
         Button openButton = new Button("Open Event");
         openButton.setOnAction(event -> handleOpenEventClick(eventId, usernameComboBox, onSuccess));
 
-        return new VBox(6, new Label("Open this event (market maker only):"),
-                new HBox(8, usernameComboBox, openButton));
+        Label header = new Label("Open this event (market maker only):");
+        header.getStyleClass().add("section-header");
+        return new VBox(6, header, new HBox(8, usernameComboBox, openButton));
     }
 
     // Opens the event via the existing IEngine.openEvent, then redraws through the caller's own callback and refreshes
@@ -409,13 +449,15 @@ public class MainViewController {
     // fill's accumulated commission for an Order Book event too, and nothing else currently displays either number.
     private static void appendEventStatusDisplay(VBox container, EventStatusDto status) {
         boolean isLmsr = status.tradingMethod() == TradingMethod.LMSR;
+        Label titleLine = wrappingLabel(status.eventName() + "  —  " + formatStatus(status.status()));
+        titleLine.getStyleClass().add("section-header");
         container.getChildren().addAll(
-                wrappingLabel(status.eventName() + "  (id " + status.eventId() + ")  —  " + status.status()),
+                titleLine,
                 wrappingLabel("Market Maker: " + status.marketMakerUsername()),
                 wrappingLabel(formatOptionLine(status.optionOneName(), status.optionOnePrice(), status.optionOneShares(), isLmsr)),
                 wrappingLabel(formatOptionLine(status.optionTwoName(), status.optionTwoPrice(), status.optionTwoShares(), isLmsr)),
-                wrappingLabel("Market maker balance: " + formatMoney(status.marketMakerBalance())),
-                wrappingLabel("Total commission collected: " + formatMoney(status.totalCommissionCollected()))
+                wrappingLabel("Market maker balance: " + formatDollars(status.marketMakerBalance())),
+                wrappingLabel("Total commission collected: " + formatDollars(status.totalCommissionCollected()))
         );
         if (status.winningOptionName() != null) {
             container.getChildren().add(wrappingLabel("Winner: " + status.winningOptionName()));
@@ -427,21 +469,23 @@ public class MainViewController {
     // One option's summary line: "price X, shares Y" for LMSR (the curve-price concept is real there), "shares Y"
     // alone for Order Book (price is meaningless there, always 0.0) -- shares outstanding stays meaningful either way.
     private static String formatOptionLine(String optionName, double price, double shares, boolean isLmsr) {
-        return optionName + ": " + (isLmsr ? "price " + formatMoney(price) + ", " : "") + "shares " + formatMoney(shares);
+        return optionName + ": " + (isLmsr ? "price " + formatDollars(price) + ", " : "") + "shares " + formatMoney(shares);
     }
 
     // Builds the trade-history block: a header plus one row per trade (already newest-first, per EventStatusDto's own contract), or a placeholder when empty.
     private static VBox buildTradeHistorySection(List<TradeRecordDto> tradeHistory) {
-        VBox section = new VBox(4, new Label("Trade history:"));
+        Label header = new Label("Trade history:");
+        header.getStyleClass().add("section-header");
+        VBox section = new VBox(4, header);
         if (tradeHistory.isEmpty()) {
             section.getChildren().add(new Label("No trades yet."));
         } else {
             for (TradeRecordDto trade : tradeHistory) {
                 section.getChildren().add(wrappingLabel(trade.optionName() + ": " + formatMoney(trade.quantity())
-                        + " share(s) @ " + formatMoney(trade.pricePerShare())
-                        + ", commission " + formatMoney(trade.commissionPaid())
-                        + ", total " + formatMoney(trade.totalPaid())
-                        + "  (" + trade.timestamp() + ")"));
+                        + " share(s) at " + formatDollars(trade.pricePerShare())
+                        + ", commission " + formatDollars(trade.commissionPaid())
+                        + ", total " + formatDollars(trade.totalPaid())
+                        + "  (" + trade.timestamp().format(TRADE_TIMESTAMP_FORMAT) + ")"));
             }
         }
         return section;
@@ -477,8 +521,9 @@ public class MainViewController {
         Button buyButton = new Button("Buy");
         buyButton.setOnAction(event -> handleBuyClick(eventId, usernameSupplier, optionComboBox, quantityField, onSuccess));
 
-        return new VBox(6, new Label("Participate:"),
-                new HBox(8, usernameNode, optionComboBox, quantityField, buyButton));
+        Label header = new Label("Participate:");
+        header.getStyleClass().add("section-header");
+        return new VBox(6, header, new HBox(8, usernameNode, optionComboBox, quantityField, buyButton));
     }
 
     // Builds a username picker populated from the currently loaded users, for the Events tab's standalone participate
@@ -560,15 +605,15 @@ public class MainViewController {
         Alert alert = new Alert(Alert.AlertType.INFORMATION);
         alert.setTitle("Purchase Complete");
         alert.setHeaderText("Bought " + formatMoney(confirmation.shareQuantity()) + " share(s) of " + confirmation.optionName());
-        alert.setContentText("Share cost: " + formatMoney(confirmation.shareCost())
-                + "\nCommission: " + formatMoney(confirmation.commissionPaid())
-                + "\nTotal paid: " + formatMoney(confirmation.totalPaid()));
+        alert.setContentText("Share cost: " + formatDollars(confirmation.shareCost())
+                + "\nCommission: " + formatDollars(confirmation.commissionPaid())
+                + "\nTotal paid: " + formatDollars(confirmation.totalPaid()));
         alert.showAndWait();
     }
 
     // Formats one event's summary row: name, status, trading method, commission rate/mode — every field EventSummaryDto already carries.
     private static String formatEventSummary(EventSummaryDto event) {
-        return event.eventName() + "  —  " + event.status() + "  —  " + event.tradingMethod()
+        return event.eventName() + "  —  " + formatStatus(event.status()) + "  —  " + formatTradingMethod(event.tradingMethod())
                 + "  —  " + event.commissionRate() + "% " + formatCommissionMode(event.commissionMode());
     }
 
@@ -577,20 +622,42 @@ public class MainViewController {
         return mode == CommissionMode.ON_PURCHASE ? "On Purchase" : "On Close";
     }
 
+    // Small presentation helpers, same pattern as formatCommissionMode above: raw enum names ("NOT_STARTED",
+    // "ORDER_BOOK") aren't something an end user should see.
+    private static String formatStatus(EventStatus status) {
+        return switch (status) {
+            case NOT_STARTED -> "Not Started";
+            case ACTIVE -> "Active";
+            case CLOSED -> "Closed";
+        };
+    }
+
+    private static String formatTradingMethod(TradingMethod method) {
+        return method == TradingMethod.ORDER_BOOK ? "Order Book" : "LMSR"; // LMSR is a domain term, not an abbreviation to expand
+    }
+
     // Formats one user's summary row: username, balance, and a blocked marker when applicable — every field UserSummaryDto already carries.
     private static String formatUserSummary(UserSummaryDto user) {
-        return user.username() + "  —  " + formatMoney(user.balance()) + (user.blocked() ? "  (BLOCKED)" : "");
+        return user.username() + "  —  " + formatDollars(user.balance()) + (user.blocked() ? "  (BLOCKED)" : "");
     }
 
     // Formats one row of a user's events-participation list: event name, status, trading method.
     private static String formatParticipation(UserEventParticipationDto participation) {
-        return participation.eventName() + "  —  " + participation.eventStatus() + "  —  " + participation.tradingMethod();
+        return participation.eventName() + "  —  " + formatStatus(participation.eventStatus())
+                + "  —  " + formatTradingMethod(participation.tradingMethod());
     }
 
     // Pins Locale.US so money/share values can't silently print a comma on a non-English-default JVM — same discipline ui.Main already applies.
     // Package-private: also called from OrderBookPanelBuilder, for the same values (quantities and prices alike).
     static String formatMoney(double value) {
         return String.format(Locale.US, "%.2f", value);
+    }
+
+    // Prefixes formatMoney's own 2-decimal formatting with the spec's own currency notation ($) -- kept separate
+    // from formatMoney itself, which is also used for bare share quantities that must never show a $.
+    // Package-private: also called from OrderBookPanelBuilder, for the same money values.
+    static String formatDollars(double value) {
+        return "$" + formatMoney(value);
     }
 
     // Package-private: also called from OrderBookPanelBuilder. A plain Label's minimum width equals its full
@@ -617,7 +684,28 @@ public class MainViewController {
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.setTitle("Error");
         alert.setHeaderText(headerText);
-        alert.setContentText(message);
+
+        // Plain setContentText's default Label sizing can truncate a realistic one-line validation message with
+        // an ellipsis. Round 1 tried setMaxWidth(Double.MAX_VALUE) at a 420px dialog width and it still truncated
+        // for a genuinely long message. Verified directly (a harness that varies the Label's own maxWidth and
+        // reads back its real laid-out bounds): DialogPane's own content region stretches its content to the full
+        // dialog width regardless of the Label's own maxWidth setting -- so the Label's maxWidth is irrelevant
+        // either way, and the width that actually matters is the DialogPane's own. setWrapText(true) plus a
+        // wide-enough dialog width is sufficient on its own.
+        Label content = new Label(message);
+        content.setWrapText(true);
+        alert.getDialogPane().setContent(content);
+        alert.getDialogPane().setPrefWidth(460);
+        alert.getDialogPane().setMinWidth(460);
+
+        // Visual only: borrow WARNING's default graphic (triangle) instead of ERROR's (red X), while keeping every
+        // other ERROR semantic (title, buttons, AlertType itself) unchanged. The default graphic is resolved from
+        // CSS at skin-creation time, which normally doesn't happen until a dialog is actually shown -- applyCss()
+        // forces it to resolve now, on a throwaway Alert that's never shown, so getGraphic() doesn't return null.
+        Alert warningForGraphic = new Alert(Alert.AlertType.WARNING);
+        warningForGraphic.getDialogPane().applyCss();
+        alert.getDialogPane().setGraphic(warningForGraphic.getDialogPane().getGraphic());
+
         alert.showAndWait();
     }
 }

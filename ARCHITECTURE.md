@@ -1665,6 +1665,46 @@ decided explicitly at submission time rather than folded silently into a refacto
   Order Book panel, the Users tab's per-event sub-panel — is added as a child of one of those
   two, inheriting the wrap for free) — this stage is purely about labels reflowing correctly
   within panels that already scrolled.
+- **UI Polish, round 2** (five changes, all display-only, no engine or `IEngine` change):
+  - **Error dialog truncation, round 2.** Round 1's `content.setMaxWidth(Double.MAX_VALUE)` at
+    a `420px` dialog width still truncated a genuinely long message (`ex2-error-3.xml`'s real
+    rejection text). First attempt at a fix tried a *fixed* `Label.maxWidth` instead, reasoning
+    it would make the wrap computation unambiguous — **that theory was wrong, caught and
+    corrected by directly testing it**: a harness varying the Label's `maxWidth` (`200` vs.
+    `400`) and reading back its real laid-out bounds showed *identical* results either way —
+    `DialogPane`'s own content region stretches its content to the full dialog width
+    regardless of the Label's own `maxWidth`, so that setting was inert the whole time. The
+    real, and only, working fix is `setWrapText(true)` plus a wide-enough dialog width
+    (`420`→`460`) — `Label.setMaxWidth` was removed from the final code. Empirically verified
+    (not just reasoned about) with a throwaway harness rendering the exact message and reading
+    back the real laid-out height: `33px`, roughly double a single line's ~16-17px, confirming
+    genuine two-line wrapping rather than a clipped single line.
+  - **Tab content hidden until a file loads**, replacing the old "filters interactable before
+    load" limitation entirely — see `MainView.fxml`'s own entry below for the structural
+    half. New `revealLoadedContent()`, called from `runLoad`'s existing `setOnSucceeded`
+    handler (the same place that already calls `refreshEventsList()`/`refreshUsersList()`).
+    Idempotent by design — flips both tabs' visibility unconditionally on every successful
+    load, so no "is this the first load" state is needed anywhere.
+  - **Numeric event id dropped from the detail header** (`appendEventStatusDisplay`'s title
+    line): an internal identifier, not something an end user needs — the event's name is
+    already what they select by.
+  - **`EventStatus`/`TradingMethod` humanized everywhere they were raw `.toString()`ed** — two
+    new small helpers, `formatStatus`/`formatTradingMethod`, same pattern as the existing
+    `formatCommissionMode` (untouched). Found and fixed at all five real sites, grepped
+    exhaustively rather than fixing only the one flagged in conversation: both filter
+    `ComboBox` converters, the detail title line, `formatEventSummary` (Events list row), and
+    `formatParticipation` (Users tab participation row). `LMSR` stays `LMSR` — a domain term,
+    not an abbreviation to expand.
+  - **"@" → "at", and a `$` added wherever a bare number is genuinely money** — new
+    `formatDollars(double)` (`"$" + formatMoney(value)`), kept deliberately separate from
+    `formatMoney` itself since that one is *also* used for bare share quantities, which must
+    never show a `$`. Every one of `formatMoney`'s ~25 call sites across `gui/` was read and
+    classified individually (money vs. quantity), not pattern-matched — 17 switched to
+    `formatDollars`, 8 confirmed genuine quantities and left untouched.
+    `OrderBookPanelBuilder.formatNullableMoney` (backing the LAST/BID/ASK/MID/SPREAD stats
+    and average fill price — all six call sites confirmed real prices, never a quantity) now
+    routes its non-null branch through `formatDollars` too, so the `$` applies uniformly
+    without touching each of its own six callers individually.
 
 #### `OrderBookPanelBuilder` (`gui/src/gui/OrderBookPanelBuilder.java`) — Order Book order-submission-UI stage, new
 - **What it is:** The Order Book event-detail panel — both options' order books side by side,
@@ -1744,19 +1784,26 @@ decided explicitly at submission time rather than folded silently into a refacto
     `refreshEventsList()` now builds an `EventFilterDto` from the three boxes' current
     selections and calls the filtered `listEvents` overload instead of the zero-arg one; every
     existing call site (load success, open/close/buy/submit-order success) is unaffected since
-    they all just call the same method. **Known, deliberately accepted edge case, decided with
-    the user rather than silently picked:** the three filter boxes are enabled from app
-    startup, before any file is loaded — touching one that early throws
-    `InvalidCommandStateException`, caught and shown as a plain error alert ("Could not list
-    events" / "No events file has been loaded yet."). No crash; left as-is rather than adding
-    disable-until-loaded binding, since the existing catch already handles it gracefully and
-    this is a rarely-hit edge (why touch a filter before loading anything?).
+    they all just call the same method. ~~**Known, deliberately accepted edge case:** the
+    three filter boxes are enabled from app startup, before any file is loaded — touching one
+    that early throws `InvalidCommandStateException`, caught as a plain error alert.~~ —
+    **superseded, UI Polish round 2**: the whole tab (filter bar included) now starts hidden
+    behind a placeholder until a file loads, so this scenario can no longer happen at all —
+    see `MainViewController`'s own round-2 note and `MainView.fxml`'s entry below.
   - **Stage 6 (resize correctness):** all three of its `Label` rows that carry unbounded or
     multi-field content — the LAST/BID/ASK/MID/SPREAD stats line, each resting-order row, each
     participant row — now go through `MainViewController.wrappingLabel(String)` instead of
     `new Label(...)`. Short, bounded labels (headers, placeholders) are untouched. See
     `MainViewController`'s own Stage 6 note below for the root cause and why this is
     structural, not cosmetic.
+  - **UI Polish, round 2:** the "@" separating quantity and price in `formatOrderRow` becomes
+    "at"; `order.price()` and both participant `optionXValue()` figures (real money) now go
+    through `MainViewController.formatDollars` instead of bare `formatMoney` — the two
+    `optionXShares()` figures on the same rows stay bare `formatMoney` (share counts, not
+    money). `showOrderConfirmation`'s commission/total lines get the same `formatDollars`
+    treatment; `quantityFilled`/`quantityResting` stay bare (quantities). See
+    `MainViewController`'s own round-2 note for the full grep-based site list across both
+    files together.
 
 #### `MainView.fxml` (`ui/resources/ui/MainView.fxml` → now `gui/resources/gui/MainView.fxml`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** The root layout: a `BorderPane` with a header `HBox` (`Load File` button +
@@ -1810,6 +1857,17 @@ decided explicitly at submission time rather than folded silently into a refacto
   960px default, not stay a single row — a real visual change from the original sketch-implied
   layout, confirmed acceptable rather than chased further. Pending the user's own visual
   confirmation, same as the timing-quirk fix above.
+  **UI Polish, round 2 — tab content hidden until a file loads.** Each `Tab`'s content is now
+  a `StackPane` holding both the real `SplitPane` (`visible="false" managed="false"` from the
+  start, given a new `fx:id` — `eventsSplitPane`/`usersSplitPane`) and a plain sibling `Label`
+  placeholder (`eventsNoFileLabel`/`usersNoFileLabel`, "No file loaded — load a file to
+  begin."). `managed="false"` means the hidden `SplitPane` contributes nothing to layout, so
+  the placeholder is the StackPane's entire visible content initially — including the filter
+  bar, which lives inside it and is therefore genuinely uninteractable before a load, not just
+  gated by an error message after the fact. `MainViewController.revealLoadedContent()` flips
+  both pairs' visibility, called from `runLoad`'s existing success handler. Supersedes the
+  Events-list-filters-stage note above and the equivalent one in `OrderBookPanelBuilder`'s
+  entry — both described the *old* always-interactable behavior this change replaces.
 
 #### `styles.css` (`ui/resources/ui/styles.css` → now `gui/resources/gui/styles.css`) — Ex2 JavaFX skeleton stage, new
 - **What it is:** A minimal hand-written CSS file (plain JavaFX `-fx-*` syntax) — a base font

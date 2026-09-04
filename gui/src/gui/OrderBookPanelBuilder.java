@@ -59,8 +59,10 @@ final class OrderBookPanelBuilder {
                 + "  MID: " + formatNullableMoney(book.midPrice())
                 + "  SPREAD: " + formatNullableMoney(book.spread()));
 
+        Label bookHeader = new Label(book.optionName() + " order book");
+        bookHeader.getStyleClass().add("section-header");
         return new VBox(6,
-                new Label(book.optionName() + " order book"),
+                bookHeader,
                 statsLine,
                 buildOrderListSection("Resting bids:", book.restingBids(), "No resting bids."),
                 buildOrderListSection("Resting asks:", book.restingAsks(), "No resting asks."));
@@ -69,7 +71,9 @@ final class OrderBookPanelBuilder {
     // One side of a book (bids or asks) as a plain list of rows -- matching the existing lightweight style
     // buildTradeHistorySection already uses for read-only display rows, not a ListView with a custom cell factory.
     private static VBox buildOrderListSection(String header, List<OrderDto> orders, String emptyText) {
-        VBox section = new VBox(4, new Label(header));
+        Label headerLabel = new Label(header);
+        headerLabel.getStyleClass().add("section-header");
+        VBox section = new VBox(4, headerLabel);
         if (orders.isEmpty()) {
             section.getChildren().add(new Label(emptyText));
         } else {
@@ -82,13 +86,15 @@ final class OrderBookPanelBuilder {
 
     private static String formatOrderRow(OrderDto order) {
         return order.username() + ": " + order.side() + " " + MainViewController.formatMoney(order.quantity())
-                + " @ " + MainViewController.formatMoney(order.price());
+                + " at " + MainViewController.formatDollars(order.price());
     }
 
     // Full-width participants list: one row per user holding shares of either option, or a placeholder when empty
     // (rare in practice -- the MM already holds both options' initial allocation as soon as the event opens).
     private static VBox buildParticipantsSection(List<ParticipantDto> participants) {
-        VBox section = new VBox(4, new Label("Participants:"));
+        Label header = new Label("Participants:");
+        header.getStyleClass().add("section-header");
+        VBox section = new VBox(4, header);
         if (participants.isEmpty()) {
             section.getChildren().add(new Label("No participants yet."));
         } else {
@@ -102,9 +108,9 @@ final class OrderBookPanelBuilder {
     private static String formatParticipantRow(ParticipantDto participant) {
         return participant.username()
                 + ": option 1 " + MainViewController.formatMoney(participant.optionOneShares())
-                + " share(s) (value " + MainViewController.formatMoney(participant.optionOneValue()) + ")"
+                + " share(s) (value " + MainViewController.formatDollars(participant.optionOneValue()) + ")"
                 + ", option 2 " + MainViewController.formatMoney(participant.optionTwoShares())
-                + " share(s) (value " + MainViewController.formatMoney(participant.optionTwoValue()) + ")";
+                + " share(s) (value " + MainViewController.formatDollars(participant.optionTwoValue()) + ")";
     }
 
     // Builds the order submission form: a username source (fixed Label from the Users tab, or a ComboBox on the
@@ -144,7 +150,9 @@ final class OrderBookPanelBuilder {
         submitButton.setOnAction(event -> handleSubmitOrderClick(controller, status.eventId(), usernameSupplier,
                 sideComboBox, optionComboBox, quantityField, priceField, onSuccess));
 
-        return new VBox(6, new Label("Submit order:"),
+        Label header = new Label("Submit order:");
+        header.getStyleClass().add("section-header");
+        return new VBox(6, header,
                 new HBox(8, usernameNode, sideComboBox, optionComboBox, quantityField, priceField, submitButton));
     }
 
@@ -170,7 +178,11 @@ final class OrderBookPanelBuilder {
         double price;
         try {
             quantity = Double.parseDouble(quantityField.getText().trim());
-            price = Double.parseDouble(priceField.getText().trim());
+            // Rounded to exactly 2 decimals here, not just displayed that way: an untruncated typed value (e.g.
+            // "0.333") could leave the mint stage's exact-d invariant (restingPrice + complementaryPrice == d) a
+            // fraction of a cent off. Quantity is deliberately left alone -- Order Book quantities are genuinely
+            // fractional at the type level (double), unlike LMSR's int, so no rounding applies there.
+            price = roundToCents(Double.parseDouble(priceField.getText().trim()));
         } catch (NumberFormatException e) {
             controller.showErrorAlert("Invalid input", "Quantity and price must be numbers.");
             return;
@@ -178,6 +190,12 @@ final class OrderBookPanelBuilder {
 
         SubmitOrderRequestDto request = new SubmitOrderRequestDto(username, eventId, optionNumber, side, quantity, price);
         submitOrder(controller, request, onSuccess);
+    }
+
+    // Mirrors OrderBookExecutor.roundToCents's own convention -- that one is engine-private and unreachable from
+    // gui, so this is a small, deliberate duplication of the same one-line formula, not a shared call.
+    private static double roundToCents(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     // Submits the order via the existing IEngine.submitOrder, then lets the caller redraw itself (onSuccess) from
@@ -202,20 +220,24 @@ final class OrderBookPanelBuilder {
     // defines it as paid for a buy but received for a sell -- always saying "paid" would misdescribe a sell.
     private static void showOrderConfirmation(OrderResultDto result) {
         String totalLabel = result.side() == OrderSide.BUY ? "Total paid" : "Total received";
+        // "Filled: 0.00" leading the dialog reads as if nothing happened or something failed, when the order was
+        // actually accepted and is genuinely resting in the book -- lead with that explicitly for the zero-fill
+        // case only; a partial or full fill's existing breakdown already reads fine on its own.
+        String leadIn = result.quantityFilled() == 0 ? "Order submitted and resting -- no immediate match.\n" : "";
         Alert alert = new Alert(Alert.AlertType.INFORMATION);
         alert.setTitle("Order Submitted");
         alert.setHeaderText(result.side() + " order for " + result.optionName());
-        alert.setContentText("Filled: " + MainViewController.formatMoney(result.quantityFilled())
+        alert.setContentText(leadIn + "Filled: " + MainViewController.formatMoney(result.quantityFilled())
                 + "\nResting: " + MainViewController.formatMoney(result.quantityResting())
                 + "\nAverage fill price: " + formatNullableMoney(result.averageFillPrice())
-                + "\nCommission: " + MainViewController.formatMoney(result.commissionPaid())
-                + "\n" + totalLabel + ": " + MainViewController.formatMoney(result.totalPaid()));
+                + "\nCommission: " + MainViewController.formatDollars(result.commissionPaid())
+                + "\n" + totalLabel + ": " + MainViewController.formatDollars(result.totalPaid()));
         alert.showAndWait();
     }
 
     // Renders a nullable stat as "—" rather than a raw null or a misleading 0.0 -- same convention as the rest of
     // this codebase's "No trades yet." / "No resting bids." placeholders for "nothing here yet."
     private static String formatNullableMoney(Double value) {
-        return value == null ? "—" : MainViewController.formatMoney(value);
+        return value == null ? "—" : MainViewController.formatDollars(value);
     }
 }

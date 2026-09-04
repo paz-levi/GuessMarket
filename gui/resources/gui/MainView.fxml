@@ -13,6 +13,7 @@
 <?import javafx.scene.layout.BorderPane?>
 <?import javafx.scene.layout.FlowPane?>
 <?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.StackPane?>
 <?import javafx.scene.layout.VBox?>
 
 <!-- Root layout: shared header (Load File button + current-file label + load progress indicator) over the Events/Users tab structure. Both tabs are list/details splits. -->
@@ -32,49 +33,55 @@
     <center>
         <TabPane fx:id="mainTabPane" tabClosingPolicy="UNAVAILABLE">
             <Tab text="Events">
-                <SplitPane dividerPositions="0.48">
-                    <VBox spacing="6">
-                        <FlowPane fx:id="eventFilterBar" hgap="16" vgap="6" styleClass="header-bar">
-                            <padding>
-                                <Insets top="8" right="8" bottom="8" left="8" />
-                            </padding>
-                            <HBox spacing="6" alignment="CENTER_LEFT">
-                                <Label text="Method:" />
-                                <ComboBox fx:id="methodFilterComboBox" prefWidth="130" minWidth="70" />
-                            </HBox>
-                            <HBox spacing="6" alignment="CENTER_LEFT">
-                                <Label text="Status:" />
-                                <ComboBox fx:id="statusFilterComboBox" prefWidth="130" minWidth="70" />
-                            </HBox>
-                            <HBox spacing="6" alignment="CENTER_LEFT">
-                                <Label text="Commission:" />
-                                <ComboBox fx:id="commissionFilterComboBox" prefWidth="130" minWidth="70" />
-                            </HBox>
-                        </FlowPane>
-                        <ListView fx:id="eventsListView" VBox.vgrow="ALWAYS" />
-                    </VBox>
-                    <ScrollPane fitToWidth="true">
-                        <VBox fx:id="eventDetailsBox" spacing="10">
-                            <padding>
-                                <Insets top="14" right="14" bottom="14" left="14" />
-                            </padding>
-                            <Label text="Select an event to view details" />
+                <StackPane>
+                    <SplitPane fx:id="eventsSplitPane" dividerPositions="0.48" visible="false" managed="false">
+                        <VBox spacing="6">
+                            <FlowPane fx:id="eventFilterBar" hgap="16" vgap="6" styleClass="header-bar">
+                                <padding>
+                                    <Insets top="8" right="8" bottom="8" left="8" />
+                                </padding>
+                                <HBox spacing="6" alignment="CENTER_LEFT">
+                                    <Label text="Method:" />
+                                    <ComboBox fx:id="methodFilterComboBox" prefWidth="130" minWidth="70" />
+                                </HBox>
+                                <HBox spacing="6" alignment="CENTER_LEFT">
+                                    <Label text="Status:" />
+                                    <ComboBox fx:id="statusFilterComboBox" prefWidth="130" minWidth="70" />
+                                </HBox>
+                                <HBox spacing="6" alignment="CENTER_LEFT">
+                                    <Label text="Commission:" />
+                                    <ComboBox fx:id="commissionFilterComboBox" prefWidth="130" minWidth="70" />
+                                </HBox>
+                            </FlowPane>
+                            <ListView fx:id="eventsListView" VBox.vgrow="ALWAYS" />
                         </VBox>
-                    </ScrollPane>
-                </SplitPane>
+                        <ScrollPane fitToWidth="true">
+                            <VBox fx:id="eventDetailsBox" spacing="10">
+                                <padding>
+                                    <Insets top="14" right="14" bottom="14" left="14" />
+                                </padding>
+                                <Label text="Select an event to view details" />
+                            </VBox>
+                        </ScrollPane>
+                    </SplitPane>
+                    <Label fx:id="eventsNoFileLabel" text="No file loaded — load a file to begin." />
+                </StackPane>
             </Tab>
             <Tab text="Users">
-                <SplitPane dividerPositions="0.48">
-                    <ListView fx:id="usersListView" />
-                    <ScrollPane fitToWidth="true">
-                        <VBox fx:id="userDetailsBox" spacing="10">
-                            <padding>
-                                <Insets top="14" right="14" bottom="14" left="14" />
-                            </padding>
-                            <Label text="Select a user to view details" />
-                        </VBox>
-                    </ScrollPane>
-                </SplitPane>
+                <StackPane>
+                    <SplitPane fx:id="usersSplitPane" dividerPositions="0.48" visible="false" managed="false">
+                        <ListView fx:id="usersListView" />
+                        <ScrollPane fitToWidth="true">
+                            <VBox fx:id="userDetailsBox" spacing="10">
+                                <padding>
+                                    <Insets top="14" right="14" bottom="14" left="14" />
+                                </padding>
+                                <Label text="Select a user to view details" />
+                            </VBox>
+                        </ScrollPane>
+                    </SplitPane>
+                    <Label fx:id="usersNoFileLabel" text="No file loaded — load a file to begin." />
+                </StackPane>
             </Tab>
         </TabPane>
     </center>

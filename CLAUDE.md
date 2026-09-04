@@ -450,10 +450,11 @@ Not implemented now (functionality first, per the confirmed functionality-only g
 collected here as they're found during manual testing, so nothing gets forgotten by the time
 this stage actually starts:
 
-- The Order Book "Order Submitted" confirmation dialog reads confusingly for a resting
-  (unfilled) order — "Filled: 0.00" reads as if nothing happened / something failed, when
-  the order was actually accepted and is resting. Reword for the zero-fill case — e.g. "Buy
-  request submitted for a total of..." rather than leading with "Filled: 0.00."
+- ~~The Order Book "Order Submitted" confirmation dialog reads confusingly for a resting
+  (unfilled) order~~ — **resolved, UI Polish round 1.** `OrderBookPanelBuilder.showOrderConfirmation`
+  now leads with "Order submitted and resting -- no immediate match." specifically when
+  `quantityFilled() == 0`, before the Filled/Resting/price breakdown; partial and full fills
+  are unaffected. Also sat unresolved after shipping — corrected alongside the two above.
 - ~~Text truncation: stat lines (e.g. "SPREAD: ...") and some labels get cut off at default
   window width~~ — **resolved, Stage 6 (resize correctness).** Root cause was structural, not
   cosmetic: a plain `Label`'s minimum width equals its full unwrapped text, so a squeezed
@@ -492,18 +493,20 @@ this stage actually starts:
   not a bug: the filter bar will likely wrap to 2-3 lines even at the default 960px width, a
   real visual change from a single row. **Pending the same visual
   confirmation as above.**
-- **Not purely cosmetic — a real (rare) precision edge case:** the Order Book submit form's
-  price `TextField` accepts any parseable double, including more than 2 decimal places
-  (e.g. a user typing `0.333`). The mint stage's exact-`d` invariant
-  (`restingPrice + complementaryPrice == d`) assumes prices are cent-precise; an
-  untruncated resting price could leave the sum a fraction of a cent off `d`. Low
-  likelihood in practice (every other price in this app is 2-decimal by convention/display),
-  but worth adding input validation/rounding to exactly 2 decimals on this field specifically
-  once back in polish mode — don't fix silently mid-Order-Book-stage.
-- The three Events-list filter `ComboBox`es (Stage 6) are enabled from app startup, before
-  any file is loaded — touching one before loading shows an error alert ("No events file
-  has been loaded yet"), accurate but a slightly odd first-touch experience. Deliberately
-  left as-is: the message is already correct (unlike the Open/Buy/Close cases that needed
-  fixing), and gating it cleanly would need new "is a file loaded" observable state that
-  doesn't exist in the current pull-based `IEngine` design — real architecture work, not a
-  small guard. Revisit only if there's spare time in the polish stage.
+- ~~Not purely cosmetic — a real (rare) precision edge case: the Order Book submit form's
+  price `TextField` accepts any parseable double, including more than 2 decimal places~~ —
+  **resolved, UI Polish round 1.** `OrderBookPanelBuilder.handleSubmitOrderClick` now rounds
+  the parsed price to exactly 2 decimals (`roundToCents`, mirroring
+  `OrderBookExecutor.roundToCents`'s own convention — `engine`-private and unreachable from
+  `gui`, so a small deliberate duplication rather than a shared call) before building the
+  `SubmitOrderRequestDto`. This entry sat unresolved after the fix shipped — caught and
+  corrected here rather than left stale.
+- ~~The three Events-list filter `ComboBox`es (Stage 6) are enabled from app startup, before
+  any file is loaded~~ — **superseded, UI Polish round 2, by a better idea than "deliberately
+  left as-is."** No new observable state needed after all: each tab's real content (filter
+  bar included) now starts hidden behind a plain "No file loaded — load a file to begin."
+  placeholder (a `StackPane` in `MainView.fxml`, `visible="false" managed="false"` on the real
+  `SplitPane` until `MainViewController.revealLoadedContent()` flips it — called from the
+  same `runLoad` success handler that already refreshes both lists). The scenario this item
+  described can no longer happen at all — nothing in either tab is interactable before a file
+  loads, not just the filters.
