@@ -6,6 +6,217 @@ scannable in seconds.
 
 ---
 
+### `7ca6ffe` — 2026-09-05 — Bonus: Skins — runtime Dark/High Contrast color-scheme switcher, defaults to off per spec
+Third Ex1/Ex2 bonus alongside the two save/load-state ones: a header `ComboBox` ("Color
+Scheme:") next to Load File, switching between "Default", "Dark", and "High Contrast" at
+runtime via `Scene.getStylesheets().setAll(...)` — no reload or relaunch needed. Two new,
+fully self-contained stylesheets (`styles-dark.css`, `styles-high-contrast.css`, not deltas on
+the existing `styles.css`), each redefining the three spec-mandated aspects (whole-screen
+background via `.root`, every button via the `.button` type selector, every label's font
+family+size via `.root`/`.label`) plus a small set of container-level rules (`.list-view`,
+`.combo-box`, `.text-field`, `.split-pane`, `.tab-pane`, `.scroll-pane`) so list/pane/field
+backgrounds don't stay light against a dark or black root.
+
+**Launches off, exactly as the spec requires for this bonus category:** the switcher defaults
+to "Default," selected *by value* (`select("Default")`), not `selectFirst()`/by index — the
+filter `ComboBox`es elsewhere in this app use `selectFirst()`, but that would be unsafe here
+specifically, since item order ("Dark" < "Default" alphabetically) could silently violate the
+must-launch-off requirement. `GuessMarketApp` itself is untouched — only `styles.css` is ever
+loaded at startup.
+
+Verified empirically, not just asserted from how `Scene.getStylesheets()` is documented: a
+harness loaded the real `MainView.fxml`/controller, showed the real `Stage`, read the root
+node's actual resolved background (`0xf4f4f4ff`, Modena's default) *before* any switch, then
+invoked the real (private, reflection-accessed) switch method for each scheme in turn and
+re-read the same already-rendered node — `0x2b2b2bff` for Dark, `0x000000ff` for High
+Contrast, back to `0xf4f4f4ff` for Default — confirming the swap re-themes already-existing
+content live, and that `setAll(...)` keeps exactly one stylesheet active at a time (never a
+multi-file cascade). Persists across a file reload with zero extra wiring, confirmed by
+reading `runLoad`/`revealLoadedContent`/`refreshEventsList`/`refreshUsersList` — none of them
+ever touch the stylesheet list. Zero engine changes.
+
+### `5ad3559` — 2026-09-04 — UI polish: bold section headers, error dialog fix + WARNING icon, reveal-on-load, humanized enum display, $ formatting, wording fixes (rounds 1+2)
+Two consolidated rounds clearing CLAUDE.md's Section 9 backlog before starting the bonus work,
+covering `MainView.fxml`, `MainViewController.java`, `OrderBookPanelBuilder.java`, and
+`styles.css`. New `.section-header` CSS class (bold) applied to every short structural
+section-intro label across both tabs and the Order Book panel, plus the event/user detail
+title line — confirmed against the actual current code both rounds, not assumed from the
+earlier Stage 6 audit. Error `Alert`s: content now wraps in an explicit `Label` inside the
+dialog pane instead of `setContentText`'s default (which truncated a genuinely long message
+with an ellipsis even after a first width-based attempt — round 2 found, by directly testing
+it, that the fix's real mechanism was never the `Label`'s own `maxWidth` at all, since
+`DialogPane` stretches its content to the dialog's own width regardless — the actual fix is
+`setWrapText(true)` plus a wide-enough dialog width, and the inert `maxWidth` call was removed
+once that was confirmed); also borrows `WARNING`'s default triangle graphic onto the `ERROR`
+alert (visual only, semantics unchanged), via a throwaway `Alert` whose `applyCss()` is forced
+explicitly since the default graphic otherwise resolves lazily and would read `null`.
+
+Round 2 also replaced the accepted "filters usable before a file loads" limitation entirely:
+both tabs' real content (filter bar included) now starts behind a plain "No file loaded" `StackPane`
+placeholder, revealed by `revealLoadedContent()` from the same `runLoad` success handler that
+already refreshes both lists — no new observable state needed. Plus: the numeric event id
+dropped from the detail header (not something an end user needs), `EventStatus`/`TradingMethod`
+humanized everywhere they were raw `.toString()`ed (found via exhaustive grep, not just the one
+site originally flagged), "@" replaced with "at", and a `formatDollars` helper added so every
+genuine money value (not the many bare share-quantity values that share `formatMoney`) shows a
+`$` — every one of `formatMoney`'s ~25 call sites individually classified, 17 switched. Two
+stale CLAUDE.md/ARCHITECTURE.md backlog entries (the OB price-rounding fix and the "Filled:
+0.00" wording fix, both already shipped earlier but never marked resolved) corrected in the
+same pass. 74/74 tests, zero engine changes throughout both rounds.
+
+### `93f9cdd` — 2026-09-03 — Fix filter-bar first-paint timing (Platform.runLater) and truncation (FlowPane wrapping, measured deficit at default/min window sizes)
+Two more resize-correctness findings from manual testing, on top of Stage 6's own commit.
+(1) The Events tab's filter-bar `Label`s sometimes rendered incorrectly until their neighboring
+`ComboBox` was clicked — traced to a known JavaFX quirk (a `ComboBox`'s `Skin` realizes some
+internal pieces lazily, so the very first CSS+layout pass inside `Stage.show()` can measure
+stale sizes for it). `GuessMarketApp.start()` now forces one extra layout pass via
+`Platform.runLater` right after `show()`, after that first pass's lazy skins have finished
+realizing. (2) Separately, the same three filter `Label`s truncated *deterministically* at the
+app's real 960px default width (not the timing quirk — gone once maximized). The first
+attempted fix (`prefWidth="130"` on the three `ComboBox`es) made it worse, not better — measured
+by hand, three `ComboBox`es at that width alone already consume ~390px, virtually the entire
+budget of the ~390-395px available in the Events tab's 48%-width `SplitPane` pane. Worse, the
+already-committed `setMinWidth(640)` floor gives only ~307px there — mathematically too little
+for six side-by-side items at *any* `prefWidth`. Structural fix: `eventFilterBar` is now a
+`FlowPane` of three label+combobox `HBox` pairs, wrapping only ever between whole pairs — checked
+against ` docs-reference/ui-sketch-layout.md` first (widget choice explicitly left open) and
+re-verified by hand that it holds even at the 640px floor (worst case: three stacked lines).
+
+### `ba114b9` — 2026-09-03 — Fix resize correctness: wrapText on unbounded labels instead of clipping, min window size guard (67/67 tests)
+Ex2 Stage 6, the last piece of the resize-correctness pass CLAUDE.md's own hard rule requires
+(and ties directly to grading per the lecturer's recording). Root cause of the text-truncation
+backlog items: a plain `Label`'s minimum width equals its full unwrapped text width, so once
+`ScrollPane.fitToWidth` clamps a panel's width on resize, a long line simply clips instead of
+reflowing. New `MainViewController.wrappingLabel(String)` (`setWrapText(true)`) applied to
+every genuinely unbounded/multi-field label — the status-display block, trade-history rows,
+the Order Book stats/order/participant rows — after individually re-checking all 28 `Label`
+construction sites across `gui/`, not assuming from a pattern; short, bounded labels (headers,
+placeholders) are left alone. `GuessMarketApp` gains `setMinWidth(640)`/`setMinHeight(420)` so
+the window can't be dragged to near-zero. No `ScrollPane` was missing anywhere — every
+dynamically-built sub-panel already inherits one from `eventDetailsBox`/`userDetailsBox`.
+
+### `b97ee9f` — 2026-09-03 — docs: fix duplicate item-1 numbering in CLAUDE.md open items list
+Commit message undersells this one considerably — read the actual diff, not just the title, to
+write this entry. Genuinely the user's own substantial CLAUDE.md reconciliation, not just a
+numbering fix: records a concrete "before Ex3, not squeezed into Ex2" trigger for the deferred
+`<fx:include>` split; refines the Order Book mint description (two `BUY` orders on opposite
+options specifically, ordinary matching always resolved first); and resolves six items with
+direct lecturer/forum quotes — negative-balance mechanics (confirmed twice), on-purchase
+commission credits the MM personally not the event account (the fact this session's own later
+commission fix was built from), resting Order Book orders simply disappear at close, an OB-close
+architectural note simplified by that same commission resolution, and self-trading (including
+self-mint) being explicitly allowed since nothing in the spec forbids it. Also adds the entire
+new CLAUDE.md Section 9 (UI Polish Backlog) with its first five items. The duplicate "1." the
+title refers to is a small merge artifact from reconciling two independently-drafted versions
+of this same content, left as a known, later-corrected loose end rather than the actual scope
+of the commit.
+
+### `f12e27b` — 2026-09-03 — Fix: Order Book on-purchase commission credits the MM personally, not the event account (lecturer-confirmed, 67/67 tests)
+Real bug, confirmed directly by the lecturer via forum reply quoting Appendix B's own
+commission section: `on-purchase` commission for an Order Book fill must credit the MM's
+personal `User.balance` in real time, not the event's own `MarketMakerAccount` — a genuine
+behavior difference from LMSR (`TradeExecutor.participate` correctly credits the event account
+per LMSR's own rules), which `OrderBookExecutor.executeFill`'s original code had incorrectly
+mirrored. Fix scoped precisely to that one ordinary-matching commission block —
+`mintAgainstOppositeOption` was already correct and untouched, since it charges no commission
+at all. `addCommissionCollected(...)` is unaffected, since it's a display-only running total,
+not money movement. The test `Fixture` previously never assigned an MM at all
+(`getMarketMakerUsername()` was `null` in every test) — now assigns a dedicated
+`MARKET_MAKER_NAME`, both closing that latent gap and letting the two updated tests
+(`onPurchaseCommissionIsChargedToTheBuyerNotTheIncomingSeller`,
+`selfTradeNetsSharesAndMoneyCorrectlyForTheSameUser`) actually observe where the money lands.
+New dedicated conservation test for the ordinary-fill path specifically, since the only
+existing conservation test in the file was mint-specific. Verified end to end through the real
+`IEngine` afterward too, on a real lecturer fixture, isolating the MM as a pure bystander in a
+3-party chain (not the unit test's own scenario) to prove the money reaches a real person, not
+just that nothing crashes.
+
+### `c7ab773` — 2026-09-01 — Add closeEvent MM authorization (was missing entirely); wire Close control + MM label in gui, hidden for Order Book events
+`IEngine.closeEvent`/`EngineImpl.closeEvent` gain a `username` parameter and a real
+`UnauthorizedMarketMakerException` check — mirroring `openEvent`'s exact authorization shape
+and ordering (identity checked before status, before anything else that could mutate state).
+`EventStatusDto` gains `marketMakerUsername` so the GUI can display it. `MainViewController`
+gets a real Close form (MM picker + winning-option picker + button), shown only for `ACTIVE`
+LMSR events — Order Book is excluded outright, since the engine still refuses to close an
+Order Book event unconditionally at this stage (settlement isn't implemented yet), so per the
+"never show a control that can only fail" principle, the Close form is hidden entirely rather
+than left for a guaranteed rejection.
+
+### `9da59b3` — 2026-09-01 — docs: add JavaFX lecture notes reference, sync CLAUDE.md source-of-truth list
+New ` docs-reference/lecture-notes-javafx.md` capturing the lecturer's JavaFX-specific teaching
+material (MVC/`<fx:include>` conventions, threading, resource-path pitfalls), cross-checked
+against what this repo actually does at the time. CLAUDE.md's own Source of Truth list updated
+to reference it alongside the other scoped reference files.
+
+### `ea2e084` — 2026-09-01 — Implement Order Book core: parsing, OB-aware openEvent, price-time-priority matching, holdings, commission; participateInEvent OB guard; status-gated action controls
+The foundational Order Book stage: `GM-order-book` XML parsing, new domain types
+(`OrderBookMarket`, `OptionBook`, `Order`), `openEvent`'s Order Book branch (initial-allocation
+share-pairs credited to the MM, mirroring the LMSR subsidy debit/credit shape), and
+`OrderBookExecutor.submit` — price-time-priority matching against the opposite side, walking
+multiple resting orders per fill, resting any unmatched remainder. `participateInEvent` gains
+an explicit Order Book guard (`IllegalTradeException`, "use submitOrder instead") rather than
+accidentally rejecting via a divide-by-zero in the LMSR overflow check. `MainViewController`'s
+action controls become status-gated (`NOT_STARTED`/`ACTIVE`/`CLOSED`) rather than always
+showing the same form. New `OrderBookExecutorTest` (checked against the appendix's own Section
+4 worked example fill-by-fill) and `test_files/ex2-orderbook.xml`. Mint and Order Book close
+are explicitly out of scope for this stage.
+
+### `c4dc8cb` — 2026-08-30 — Add Ex2 sample XML files (lecturer-provided, ex2- prefix to avoid clashing with Ex1 test_files)
+Four lecturer-provided fixtures (`ex2-small.xml`, `ex2-multiple.xml`, `ex2-error-2.xml`,
+`ex2-error-3.xml`) added under `test_files/`, prefixed to coexist with the Ex1 fixtures already
+there rather than replacing them.
+
+### `f43d16e` — 2026-08-30 — docs: add missing order-book-appendix.md and xml-schema-appendix-ex2.md
+The two Ex2-specific reference documents CLAUDE.md's Source of Truth list already named but
+which hadn't actually been created yet: Order Book mechanics plus its two worked numeric
+examples, and the Ex2 XML schema addendum (`GM-users`, `GM-market-maker`, `GM-order-book`,
+`GM-method` as a choice).
+
+### `f84bac3` — 2026-08-12 — .gitignore: add .mcp.json
+Mislabeled with a copy-pasted "Initial commit: Exercise 1 skeleton" message (the real initial
+commit is `1ff3c80`, a full day earlier and hundreds of lines) — the actual diff is a
+three-line `.gitignore` addition, `.mcp.json`. Logged under its real content, not its message,
+per this file's own read-the-actual-diff standard.
+
+### `a2d84ff` — 2026-09-03 — Implement Order Book closeEvent: pay winners d/share from holdings, ON_CLOSE commission to MM personally (74/74 tests)
+The last remaining piece of Order Book — and of Ex2's core functionality overall: both trading
+methods now support the full `open → trade → close` cycle end to end. Unblocked by three forum
+questions resolving this session (CLAUDE.md Section 8 item 4): payout is `d` per winning share
+from `OptionBook.holdings` (not trade-history replay, which only works for LMSR since it has no
+sell), resting orders are financially inert at close, and `on-purchase` commission already
+reaches the MM personally in real time so the account holds pure principal only.
+
+New `OrderBookExecutor.close(Event, int, Map<String, User>)` — same name/three-parameter shape
+as `TradeExecutor.close`, but deliberately not its internal "hold commission back from the
+debit, sweep it out as leftover subsidy" trick: Order Book has no leftover-subsidy concept at
+all (unlike LMSR, whose subsidy and payout formulas genuinely differ). The account's balance at
+close time is always exactly `sharesOutstanding(winningOption) × d` (nothing else ever credits
+or debits it — `open()` once, a mint per pair, never an ordinary fill under either commission
+mode), so debiting that full gross payout drains it to precisely `0.0` by construction, not via
+a sweep. Pays proportionally to each holder's own shares (not an equal split); losing-option
+holders are never visited. `EngineImpl.closeEvent`'s blanket `IllegalTradeException` for every
+Order Book event is now a real branch to this method; the LMSR path (`TradeExecutor.close`) is
+untouched.
+
+**Explicit distinction, not glossed over:** `ON_CLOSE` commission is computed per holder and
+credited to the MM personally, same destination as `on-purchase` — but this extends the
+lecturer-confirmed principle (on-purchase commission → MM personally, Appendix B) to on-close
+*by this stage's own consistency interpretation*, not a second independent lecturer
+confirmation. `ON_PURCHASE` deducts nothing further at close (already fully settled per-fill).
+
+Hand-traced against a concrete 60/40-holder example (20% `ON_CLOSE` rate: 60 shares → net
+48.00, 40 shares → net 32.00, commission 12.00+8.00=20.00 to the MM, account `100.00 → 0.00`
+exactly) before any code was written — same standard as every other money-logic change this
+session. Six new `OrderBookExecutorTest` cases cover that exact scenario (proportional payout
+combined with commission landing cleanly on a bystander MM who holds none of the winning
+option), a losing holder's balance provably untouched, `ON_PURCHASE` needing zero extra
+deduction, a blocked winner auto-unblocking on credit, and full conservation. `EngineImplTest`'s
+`closeEventStillRejectsOrderBookEventsAfterLeftoverFix` — whose entire premise (OB close always
+rejected) this stage makes false — is replaced, not left in place: a real full-cycle OB close
+test plus two regression cases (already-`CLOSED` rejected, non-MM rejected) confirming the
+shared auth/status guard chain still fires now that Order Book actually reaches it. 74/74 tests
+(67 → 74).
+
 ### `f09a990` — 2026-09-03 — Implement Events-list filters (trading method, status, commission mode) end to end, engine + UI (66/66 tests)
 `EventFilterDto`/`IEngine.listEvents(EventFilterDto)` existed since the skeleton stage but the
 engine method still threw `UnsupportedOperationException`, and no UI ever called it. Now real
