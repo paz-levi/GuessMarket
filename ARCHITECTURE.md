@@ -5,11 +5,11 @@ add entries here, existing entries are not rewritten away. Grouped by module.
 
 ```mermaid
 flowchart TD
-    subgraph UI["ui module (frozen Ex1 console)"]
+    subgraph UI["ui module (frozen Ex1 console, dev-only reference, never packaged)"]
         Main["Main (console UI, run-console.bat)"]
     end
 
-    subgraph GUI["gui module (JavaFX, ships for Ex2)"]
+    subgraph GUI["gui module (JavaFX, the only module that ships for Ex2)"]
         GuessMarketApp["GuessMarketApp (active entry point, run.bat)"]
         MainViewController["MainViewController"]
         OrderBookPanelBuilder["OrderBookPanelBuilder"]
@@ -37,6 +37,7 @@ flowchart TD
             Event["Event"]
             EventOption["EventOption"]
             Trade["Trade"]
+            User["User"]
             MarketMakerAccount["MarketMakerAccount"]
             CommissionMode["CommissionMode"]
             subgraph LMSR["engine.domain.lmsr"]
@@ -63,6 +64,7 @@ flowchart TD
             UserEventParticipationDto["UserEventParticipationDto"]
             OrderDto["OrderDto"]
             SubmitOrderRequestDto["SubmitOrderRequestDto"]
+            OrderResultDto["OrderResultDto"]
             OrderBookSnapshotDto["OrderBookSnapshotDto"]
             ParticipantDto["ParticipantDto"]
             EventFilterDto["EventFilterDto"]
@@ -84,24 +86,40 @@ flowchart TD
     Main -->|"createDefault() / calls"| IEngine
     IEngine -.->|"implemented by"| EngineImpl
     EngineImpl -->|"loadEventsFile() delegates to"| EventsFileLoader
-    EventsFileLoader -->|"parses XML into"| Event
+    EventsFileLoader -->|"parses GM-events into"| Event
+    EventsFileLoader -->|"parses GM-users into, cross-references MM against"| User
     Event --> EventOption
     Event --> MarketMakerAccount
     Event --> CommissionMode
     Event --> Trade
-    EngineImpl -->|"participateInEvent()/closeEvent() delegate to"| TradeExecutor
+    Event -->|"composes (null for LMSR)"| OrderBookMarket
+    OrderBookMarket --> OptionBook
+    OptionBook --> Order
+    EngineImpl -->|"participateInEvent()/closeEvent() (LMSR) delegate to"| TradeExecutor
     TradeExecutor -->|"prices via"| LmsrMath
     TradeExecutor -->|"mutates"| Event
-    EngineImpl -->|"maps Event to"| DTO
+    TradeExecutor -->|"credits/debits"| User
+    EngineImpl -->|"submitOrder()/closeEvent() (Order Book) delegate to"| OrderBookExecutor
+    OrderBookExecutor -->|"mutates"| Event
+    OrderBookExecutor -->|"credits/debits"| User
+    EngineImpl -->|"openEvent()/listUsers()/getUser() also read/mutate"| User
+    EngineImpl -->|"maps Event/User to"| DTO
     EngineImpl -->|"throws"| EXC
     EngineImpl -->|"saveState()/loadState() delegate to"| StateFileManager
     StateFileManager -->|"serializes/deserializes"| EngineStateSnapshot
     EngineStateSnapshot --> Event
+    EngineStateSnapshot --> User
     Main -->|"loadEventsFile()/listEvents()/getEventStatus()/participateInEvent()/closeEvent()/saveState()/loadState()"| IEngine
     Main -->|"catches"| EXC
     Main -->|"reads/prints"| DTO
+    GuessMarketApp -->|"createDefault(), hands to controller"| IEngine
     GuessMarketApp -->|"FXMLLoader.load() builds"| MainViewController
-    GuessMarketApp -.->|"not yet calls"| IEngine
+    MainViewController -->|"calls every IEngine method (load/list/get/participate/open/close/submitOrder/save/load)"| IEngine
+    MainViewController -->|"reads/builds"| DTO
+    MainViewController -->|"catches"| EXC
+    MainViewController -->|"delegates ORDER_BOOK panels to"| OrderBookPanelBuilder
+    OrderBookPanelBuilder -->|"calls submitOrder() via controller.engine"| IEngine
+    OrderBookPanelBuilder -->|"reads/builds"| DTO
 ```
 
 ---
