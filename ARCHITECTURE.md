@@ -13,6 +13,7 @@ flowchart TD
         GuessMarketApp["GuessMarketApp (active entry point, run.bat)"]
         MainViewController["MainViewController"]
         OrderBookPanelBuilder["OrderBookPanelBuilder"]
+        CreateEventDialogBuilder["CreateEventDialogBuilder"]
     end
 
     subgraph ENGINE["engine module"]
@@ -68,6 +69,7 @@ flowchart TD
             OrderBookSnapshotDto["OrderBookSnapshotDto"]
             ParticipantDto["ParticipantDto"]
             EventFilterDto["EventFilterDto"]
+            CreateEventRequestDto["CreateEventRequestDto"]
         end
 
         subgraph EXC["exception"]
@@ -80,6 +82,7 @@ flowchart TD
             UserBlockedException["UserBlockedException"]
             UnauthorizedMarketMakerException["UnauthorizedMarketMakerException"]
             UserNotFoundException["UserNotFoundException"]
+            InvalidEventDefinitionException["InvalidEventDefinitionException"]
         end
     end
 
@@ -103,6 +106,7 @@ flowchart TD
     OrderBookExecutor -->|"mutates"| Event
     OrderBookExecutor -->|"credits/debits"| User
     EngineImpl -->|"openEvent()/listUsers()/getUser() also read/mutate"| User
+    EngineImpl -->|"createEvent() constructs a fresh"| Event
     EngineImpl -->|"maps Event/User to"| DTO
     EngineImpl -->|"throws"| EXC
     EngineImpl -->|"saveState()/loadState() delegate to"| StateFileManager
@@ -120,6 +124,9 @@ flowchart TD
     MainViewController -->|"delegates ORDER_BOOK panels to"| OrderBookPanelBuilder
     OrderBookPanelBuilder -->|"calls submitOrder() via controller.engine"| IEngine
     OrderBookPanelBuilder -->|"reads/builds"| DTO
+    MainViewController -->|"delegates the Create Event dialog to"| CreateEventDialogBuilder
+    CreateEventDialogBuilder -->|"calls createEvent() via controller.engine"| IEngine
+    CreateEventDialogBuilder -->|"reads/builds"| DTO
 ```
 
 ---
@@ -1919,3 +1926,90 @@ the 4 core JavaFX jars via relative `$MODULE_DIR$/../javafx-sdk/lib` paths (IDE-
 convenience — `build.bat` never reads `.iml` files, so this can't affect the command-line
 build either way). All paths are relative throughout, so the wiring works unchanged after the
 grader unzips the submission on a machine with no JavaFX pre-installed.
+
+## Ex2 Bonus — Create New Event
+
+#### `dto.CreateEventRequestDto` (`engine/src/dto/CreateEventRequestDto.java`) — new
+- **What it is:** A flat record bundling every field needed to define a brand-new event from
+  scratch: the common fields (name, description, both option names, MM username, commission
+  rate/mode, trading method) plus both methods' own fields side by side (`liquidityParameter`
+  for LMSR; `initial`/`d`/`allowMint` for Order Book) — mirrors `SubmitOrderRequestDto`'s exact
+  flat-bundle style.
+- **Why it exists:** `IEngine.createEvent`'s single-method signature per the DTO-as-
+  multi-param-bundle convention already used throughout this codebase, rather than 12 loose
+  parameters.
+- **What it connects to:** Built by `CreateEventDialogBuilder`'s form, consumed by
+  `EngineImpl.createEvent`.
+
+#### `exception.InvalidEventDefinitionException` (`engine/src/exception/InvalidEventDefinitionException.java`) — new
+- **What it is:** A new unchecked exception, `extends GuessMarketException`, exact same shape
+  as every other exception in this package (single `String message` constructor, no extra
+  fields).
+- **Why it exists:** None of the 8 existing exceptions fit "a brand-new event's own definition
+  is malformed" — `XmlValidationException` is explicitly file-load-time per its own doc
+  comment, `IllegalTradeException` is about trade legality, not event-definition legality.
+  Thrown for a blank name/description/option name, an out-of-range commission rate, or an
+  invalid LMSR/Order Book parameter.
+- **What it connects to:** Thrown by `EngineImpl.createEvent`'s validation step; caught by
+  `CreateEventDialogBuilder` the same way every other `GuessMarketException` is caught in
+  `gui`.
+
+#### `IEngine.createEvent` / `EngineImpl.createEvent` — new
+- **What it is:** `EventStatusDto createEvent(CreateEventRequestDto request) throws
+  InvalidCommandStateException, UserNotFoundException, InvalidEventDefinitionException`.
+  `EngineImpl`'s implementation validates the request (mirroring `EventsFileLoader`'s own
+  exact business-rule constants — commission range `[0, 90]`, `d > 0`, `initial >= 0` — plus
+  the spec's own "b positive integer" rule for LMSR, freshly enforced here since
+  `EventsFileLoader` doesn't currently re-check it at parse time), looks up the chosen MM by
+  username, then constructs a plain `Event` in exactly the same `NOT_STARTED`/zero-balance
+  shape `EventsFileLoader.buildEvent` already produces — including its identical two-way
+  branch on trading method (`liquidityParameter` real + `orderBook` null for LMSR;
+  `liquidityParameter` the literal `0` + a real `OrderBookMarket` for Order Book) — assigns a
+  fresh id one past the current max loaded id, and `put`s it into the same `events` map every
+  other event already lives in.
+- **Why it exists:** Lets an existing, loaded user create a brand-new event and become its MM,
+  per the spec's Create Event bonus requirement.
+- **What it connects to:** Deliberately reuses `openEvent`/`TradeExecutor`/`OrderBookExecutor`
+  **entirely unchanged** — a created event only reaches `NOT_STARTED`; the existing Open Event
+  flow is what funds/activates it, proven by feeding a created event of each trading method
+  through the real, untouched `openEvent` → `participateInEvent`/`submitOrder` path in a
+  verification harness. ID collision is structurally impossible: `events.keySet().stream()
+  .max().orElse(0) + 1` is strictly greater than every id ever loaded or previously created,
+  and the whole `events` map is discarded on any subsequent file/state load exactly like every
+  other in-memory event, per `EngineImpl.loadEventsFile`'s existing unconditional `clear()`.
+
+#### `gui.CreateEventDialogBuilder` (`gui/src/gui/CreateEventDialogBuilder.java`) — new
+- **What it is:** A plain static-method helper class (not FXML, not a separate `Controller`)
+  that builds and drives the "Create Event" modal `Dialog<ButtonType>` — the app's first real
+  `Dialog` (every prior dialog is a display-only `Alert`). Common fields plus a trading-method
+  `ComboBox` toggle that swaps an inner `VBox`'s children wholesale between the LMSR field
+  group (liquidity parameter) and the Order Book field group (initial/d/allow-mint) — the same
+  imperative `setAll(...)` rebuild style already used elsewhere in `gui`. A validation failure
+  (a `NumberFormatException` or a `GuessMarketException` from the engine) is caught by an event
+  filter on the Create button that consumes the `ActionEvent`, keeping the dialog open with the
+  user's input intact rather than closing and losing it.
+- **Why it exists:** Mirrors `OrderBookPanelBuilder`'s exact role/reasoning per CLAUDE.md's
+  recorded `<fx:include>`-deferral decision — a large new UI block goes into its own
+  static-method helper class rather than growing `MainViewController` further.
+- **What it connects to:** Invoked from `MainViewController.handleCreateEventClick()` (wired to
+  a new `createEventButton` in the Events tab's own toolbar row, above the filter bar — a
+  created event only ever affects that tab's own list, unlike the genuinely cross-tab header
+  controls). Reuses `MainViewController.buildUsernameComboBox()` for the MM picker unchanged,
+  and `formatCommissionMode`/`formatTradingMethod` (both widened from `private` to
+  package-private for this reuse, avoiding duplicating their display strings) for its two enum
+  `ComboBox`es. Calls `IEngine.createEvent` via `controller.engine`, then
+  `controller.refreshEventsList()` on success, then hands the new event's `EventStatusDto` back
+  to the controller's own `showEventDetails` so it's visible immediately.
+
+#### `MainView.fxml` — Create Event toolbar row, new
+- **What it is:** A new `HBox fx:id="eventsToolBar"` holding the `createEventButton`, inserted
+  directly above the existing `eventFilterBar` `FlowPane`, inside the same `VBox` (so it's
+  gated by the exact same `eventsSplitPane` reveal-on-load mechanism as everything else in that
+  tab — no new gating code needed).
+- **Why it exists:** A created event only ever affects the Events tab's own list (unlike Load
+  File/Color Scheme, which are genuinely app-wide and live in the header) — kept action
+  controls (this button) visually and semantically distinct from filter controls
+  (`eventFilterBar`) by giving each its own row, rather than merging one into the other's
+  already space-constrained `FlowPane`.
+- **What it connects to:** `createEventButton` is wired in `MainViewController.initialize()`
+  to `handleCreateEventClick()`, which opens `CreateEventDialogBuilder`.

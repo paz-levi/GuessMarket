@@ -94,6 +94,9 @@ public class MainViewController {
     private ComboBox<CommissionMode> commissionFilterComboBox;
 
     @FXML
+    private Button createEventButton;
+
+    @FXML
     private ListView<EventSummaryDto> eventsListView;
 
     @FXML
@@ -129,6 +132,7 @@ public class MainViewController {
     @FXML
     private void initialize() {
         loadFileButton.setOnAction(event -> handleLoadFile());
+        createEventButton.setOnAction(event -> handleCreateEventClick());
 
         // Skins bonus: three schemes, defaulting to "Default" -- selected BY VALUE, not selectFirst()/by index,
         // so correctness never depends on item order (the filter ComboBoxes elsewhere use selectFirst(), which
@@ -235,6 +239,13 @@ public class MainViewController {
         Thread thread = new Thread(loadTask, "load-events-file");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    // Opens the "Create Event" dialog. A plain static-method helper class (CreateEventDialogBuilder) builds and
+    // drives the whole form, matching OrderBookPanelBuilder's own role/reasoning; on success it already refreshes
+    // the Events list itself, so this only needs to show the newly created event's details afterward.
+    private void handleCreateEventClick() {
+        CreateEventDialogBuilder.show(this, status -> showEventDetails(status.eventId()));
     }
 
     // Swaps each tab's "No file loaded" placeholder for its real content (filter bar included, so nothing in it
@@ -808,7 +819,9 @@ public class MainViewController {
     }
 
     // Small presentation helper, matching ui.Main's own formatCommissionMode wording.
-    private static String formatCommissionMode(CommissionMode mode) {
+    // Package-private (not private): CreateEventDialogBuilder, a separate class in this same package, reuses these
+    // two for its own commission-mode/trading-method ComboBoxes rather than duplicating the display strings.
+    static String formatCommissionMode(CommissionMode mode) {
         return mode == CommissionMode.ON_PURCHASE ? "On Purchase" : "On Close";
     }
 
@@ -822,7 +835,7 @@ public class MainViewController {
         };
     }
 
-    private static String formatTradingMethod(TradingMethod method) {
+    static String formatTradingMethod(TradingMethod method) {
         return method == TradingMethod.ORDER_BOOK ? "Order Book" : "LMSR"; // LMSR is a domain term, not an abbreviation to expand
     }
 

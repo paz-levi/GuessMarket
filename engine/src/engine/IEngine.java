@@ -2,6 +2,7 @@ package engine;
 
 import java.util.List;
 
+import dto.CreateEventRequestDto;
 import dto.EventFilterDto;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
@@ -13,6 +14,7 @@ import dto.UserSummaryDto;
 import exception.EventNotFoundException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
+import exception.InvalidEventDefinitionException;
 import exception.StateFileException;
 import exception.UnauthorizedMarketMakerException;
 import exception.UserBlockedException;
@@ -73,4 +75,10 @@ public interface IEngine {
 
     // Returns a summary of every currently loaded event matching the given filter (null fields on the filter mean "all" for that dimension).
     List<EventSummaryDto> listEvents(EventFilterDto filter) throws InvalidCommandStateException;
+
+    // Creates a brand-new NOT_STARTED event from scratch and assigns request's chosen user as its MM; the event
+    // still needs the existing openEvent flow to fund/activate it, exactly like a loaded one -- creation never
+    // touches trading state.
+    EventStatusDto createEvent(CreateEventRequestDto request)
+            throws InvalidCommandStateException, UserNotFoundException, InvalidEventDefinitionException;
 }

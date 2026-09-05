@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import dto.CreateEventRequestDto;
 import dto.EventFilterDto;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
@@ -44,6 +45,7 @@ import engine.impl.xml.LoadedFile;
 import exception.EventNotFoundException;
 import exception.IllegalTradeException;
 import exception.InvalidCommandStateException;
+import exception.InvalidEventDefinitionException;
 import exception.StateFileException;
 import exception.UnauthorizedMarketMakerException;
 import exception.UserBlockedException;
@@ -54,6 +56,10 @@ import exception.XmlValidationException;
 public class EngineImpl implements IEngine {
 
     private static final String NO_FILE_LOADED_MESSAGE = "No events file has been loaded yet.";
+    // Mirrors EventsFileLoader's own MIN_COMMISSION/MAX_COMMISSION constants exactly, so a created event must
+    // satisfy the identical commission-rate rule a loaded one already must.
+    private static final int MIN_COMMISSION_RATE = 0;
+    private static final int MAX_COMMISSION_RATE = 90;
 
     private final Map<Integer, Event> events = new LinkedHashMap<>();
     private final Map<String, User> users = new LinkedHashMap<>();
@@ -467,6 +473,94 @@ public class EngineImpl implements IEngine {
         }
         event.open();
         return toStatusDto(event);
+    }
+
+    // Creates a brand-new NOT_STARTED event from the given definition and assigns its MM -- mirrors
+    // EventsFileLoader.buildEvent's own branching exactly (liquidityParameter meaningful only for LMSR, passed as
+    // the literal 0 for Order Book; orderBook null only for LMSR) so a created event is indistinguishable in shape
+    // from a loaded one. openEvent (unchanged) is what actually funds/activates it; this method never touches
+    // trading state.
+    @Override
+    public EventStatusDto createEvent(CreateEventRequestDto request)
+            throws InvalidCommandStateException, UserNotFoundException, InvalidEventDefinitionException {
+        if (users.isEmpty()) {
+            throw new InvalidCommandStateException(NO_FILE_LOADED_MESSAGE);
+        }
+        validateCreateEventRequest(request);
+        User marketMaker = users.get(request.marketMakerUsername());
+        if (marketMaker == null) {
+            throw new UserNotFoundException("No user named \"" + request.marketMakerUsername() + "\" is currently loaded.");
+        }
+
+        EventOption optionOne = new EventOption(request.optionOneName().trim());
+        EventOption optionTwo = new EventOption(request.optionTwoName().trim());
+        // Starts at 0 either way, exactly like EventsFileLoader.buildEvent: the MM's opening payment only moves
+        // from their own balance once openEvent actually opens this event.
+        MarketMakerAccount marketMakerAccount = new MarketMakerAccount(0.0);
+        CommissionMode commissionMode = toDomainCommissionMode(request.commissionMode());
+        int id = events.keySet().stream().mapToInt(Integer::intValue).max().orElse(0) + 1;
+
+        // This is the exact branch EventsFileLoader.buildEvent (lines 159-168) already runs at load time --
+        // reproduced here field-for-field so a created event and a loaded event are built the same way.
+        Event event;
+        if (request.tradingMethod() == TradingMethod.LMSR) {
+            event = new Event(id, request.name().trim(), request.description().trim(), optionOne, optionTwo,
+                    request.commissionRate(), commissionMode, request.liquidityParameter(),
+                    marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.LMSR, null);
+        } else {
+            // liquidityParameter is passed as the literal 0 and orderBook is a real OrderBookMarket -- the mirror
+            // image of the LMSR branch above, exactly matching EventsFileLoader.buildEvent's own two return statements.
+            OrderBookMarket orderBook = new OrderBookMarket(request.initial(), request.d(), request.allowMint());
+            event = new Event(id, request.name().trim(), request.description().trim(), optionOne, optionTwo,
+                    request.commissionRate(), commissionMode, 0,
+                    marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.ORDER_BOOK, orderBook);
+        }
+        event.assignMarketMaker(request.marketMakerUsername());
+        events.put(id, event);
+        return toStatusDto(event);
+    }
+
+    // Validates a create-event request's own fields, mirroring EventsFileLoader's exact business-rule constants
+    // (commission range, d > 0, initial >= 0) so a created event must satisfy the same rules a loaded one already
+    // must. marketMakerUsername's existence is checked separately in createEvent as a UserNotFoundException --
+    // a different failure category (an unknown reference, not a malformed definition).
+    private static void validateCreateEventRequest(CreateEventRequestDto request) {
+        requireNonBlank(request.name(), "name");
+        requireNonBlank(request.description(), "description");
+        requireNonBlank(request.optionOneName(), "optionOneName");
+        requireNonBlank(request.optionTwoName(), "optionTwoName");
+        requireNonBlank(request.marketMakerUsername(), "marketMakerUsername");
+        if (request.commissionRate() < MIN_COMMISSION_RATE || request.commissionRate() > MAX_COMMISSION_RATE) {
+            throw new InvalidEventDefinitionException("commissionRate " + request.commissionRate()
+                    + " is outside the allowed range [" + MIN_COMMISSION_RATE + ", " + MAX_COMMISSION_RATE + "].");
+        }
+        if (request.tradingMethod() == TradingMethod.LMSR) {
+            if (request.liquidityParameter() <= 0) {
+                throw new InvalidEventDefinitionException("liquidityParameter (b) " + request.liquidityParameter()
+                        + " must be greater than 0.");
+            }
+        } else {
+            if (request.d() <= 0) {
+                throw new InvalidEventDefinitionException("d " + request.d() + " must be greater than 0.");
+            }
+            if (request.initial() < 0) {
+                throw new InvalidEventDefinitionException("initial " + request.initial() + " must not be negative.");
+            }
+        }
+    }
+
+    private static void requireNonBlank(String value, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new InvalidEventDefinitionException(fieldName + " must not be blank.");
+        }
+    }
+
+    // The inverse of toDtoCommissionMode -- needed only by createEvent, since every other path already receives a
+    // domain CommissionMode straight from EventsFileLoader and never needs to map back from the dto-level enum.
+    private static CommissionMode toDomainCommissionMode(dto.CommissionMode commissionMode) {
+        return commissionMode == dto.CommissionMode.ON_PURCHASE
+                ? CommissionMode.ON_PURCHASE
+                : CommissionMode.ON_CLOSE;
     }
 
     // Submits an order-book order on username's behalf: matches it against the book and rests any remainder.

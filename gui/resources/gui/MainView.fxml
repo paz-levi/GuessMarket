@@ -38,6 +38,9 @@
                 <StackPane>
                     <SplitPane fx:id="eventsSplitPane" dividerPositions="0.48" visible="false" managed="false">
                         <VBox spacing="6">
+                            <HBox fx:id="eventsToolBar" spacing="8">
+                                <Button fx:id="createEventButton" text="Create Event" />
+                            </HBox>
                             <FlowPane fx:id="eventFilterBar" hgap="16" vgap="6" styleClass="header-bar">
                                 <padding>
                                     <Insets top="8" right="8" bottom="8" left="8" />
