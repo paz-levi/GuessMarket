@@ -101,3 +101,58 @@
 .scroll-pane, .scroll-pane > .viewport {
     -fx-background-color: black;
 }
+
+/* Bonus: Graphs. LineChart styles through its own selector set (chart-plot-background, chart-series-line,
+   axis, legend, grid lines) -- none of it is touched by the rules above, confirmed by reading this file, not
+   assumed. Without these, a chart would keep Modena's light plot background and default series colors
+   regardless of the active scheme. Series colors (white, cyan) are chosen to stay legible against black
+   alongside this scheme's existing yellow labels/buttons, not yellow-on-yellow. */
+.chart {
+    -fx-background-color: black;
+}
+
+.chart-title {
+    -fx-text-fill: yellow;
+}
+
+.chart-plot-background {
+    -fx-background-color: black;
+}
+
+.chart-vertical-grid-lines, .chart-horizontal-grid-lines {
+    -fx-stroke: #666600;
+}
+
+.axis {
+    -fx-tick-label-fill: yellow;
+    -fx-axis-tick-mark-fill: yellow;
+}
+
+.axis-label {
+    -fx-text-fill: yellow;
+}
+
+.chart-legend {
+    -fx-background-color: black;
+    -fx-text-fill: yellow;
+}
+
+.chart-legend-item {
+    -fx-text-fill: yellow;
+}
+
+.default-color0.chart-series-line {
+    -fx-stroke: white;
+}
+
+.default-color1.chart-series-line {
+    -fx-stroke: cyan;
+}
+
+.default-color0.chart-line-symbol {
+    -fx-background-color: white, black;
+}
+
+.default-color1.chart-line-symbol {
+    -fx-background-color: cyan, black;
+}

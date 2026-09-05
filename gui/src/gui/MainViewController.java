@@ -2,6 +2,9 @@ package gui;
 
 import java.io.File;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
@@ -12,6 +15,9 @@ import javafx.concurrent.Task;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.chart.LineChart;
+import javafx.scene.chart.NumberAxis;
+import javafx.scene.chart.XYChart;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
@@ -51,6 +57,20 @@ public class MainViewController {
     // Trade-history rows show hour:minute only, not the raw LocalDateTime's full ISO-8601-with-microseconds --
     // matching every other clean-formatting convention already used in this app (e.g. 2-decimal money).
     private static final DateTimeFormatter TRADE_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
+
+    // Chart y-axis tick labels, formatted with the app's own $ convention (formatMoney's 2-decimal rule) instead
+    // of NumberAxis's own default numeric formatting.
+    private static final StringConverter<Number> DOLLAR_AXIS_FORMATTER = new StringConverter<>() {
+        @Override
+        public String toString(Number value) {
+            return "$" + formatMoney(value.doubleValue());
+        }
+
+        @Override
+        public Number fromString(String string) {
+            throw new UnsupportedOperationException(); // axis tick labels are never parsed back
+        }
+    };
 
     @FXML
     private Button loadFileButton;
@@ -316,6 +336,7 @@ public class MainViewController {
 
         userDetailsBox.getChildren().setAll(
                 balanceBadge,
+                buildBalanceHistorySection(detail),
                 participationHeader,
                 participationListView,
                 new Separator(),
@@ -331,6 +352,85 @@ public class MainViewController {
                 }
             }
         }
+    }
+
+    // Bonus: Graphs. Builds the user's balance-history section: a header, a chart reconstructed from this user's
+    // own merged, chronologically-sorted trade history across every event they've touched, and a caption
+    // disclosing the reconstruction's real accuracy boundary -- see reconstructBalanceSeries's own doc comment
+    // for exactly what that boundary is. "No purchases yet." placeholder when there's nothing to reconstruct
+    // from. x-axis is purchase sequence index, same reasoning as buildPriceHistorySection's own x-axis choice.
+    private static VBox buildBalanceHistorySection(UserDetailDto detail) {
+        Label header = new Label("Balance History:");
+        header.getStyleClass().add("section-header");
+
+        // Each participation's own tradeHistory() is newest-first (EngineImpl.toParticipationDto walks the
+        // event's chronological trade list in reverse) -- reversed back to true chronological here BEFORE
+        // merging. That per-event order is reliable (real insertion order, immune to timestamp ties), which
+        // matters because two same-event trades can share one LocalDateTime.now() value on fast successive
+        // calls -- List.sort is stable, so sorting the newest-first lists directly by timestamp would leave
+        // tied same-event trades in their pre-sort (i.e. backwards) order instead of fixing it. Found and fixed
+        // via this exact scenario during verification, not assumed safe.
+        List<TradeRecordDto> merged = new ArrayList<>();
+        for (UserEventParticipationDto participation : detail.activeParticipations()) {
+            List<TradeRecordDto> chronological = new ArrayList<>(participation.tradeHistory());
+            Collections.reverse(chronological);
+            merged.addAll(chronological);
+        }
+        merged.sort(Comparator.comparing(TradeRecordDto::timestamp));
+        if (merged.isEmpty()) {
+            return new VBox(4, header, new Label("No purchases yet."));
+        }
+
+        double[] balances = reconstructBalanceSeries(merged, detail.balance());
+
+        NumberAxis xAxis = new NumberAxis();
+        xAxis.setLabel("Purchase #");
+        NumberAxis yAxis = new NumberAxis();
+        yAxis.setLabel("Balance");
+        yAxis.setTickLabelFormatter(DOLLAR_AXIS_FORMATTER);
+
+        XYChart.Series<Number, Number> series = new XYChart.Series<>();
+        for (int i = 0; i < balances.length; i++) {
+            series.getData().add(new XYChart.Data<>(i + 1, balances[i]));
+        }
+
+        LineChart<Number, Number> chart = new LineChart<>(xAxis, yAxis);
+        chart.setAnimated(false); // same reasoning as buildPriceHistorySection's chart
+        chart.setLegendVisible(false); // only one series -- a legend would just repeat "Balance" for no benefit
+        chart.getData().add(series);
+
+        Label caption = wrappingLabel("Reconstructed from recorded purchases; other balance-affecting events "
+                + "(payouts, subsidies, sale proceeds) aren't reflected and may shift earlier points.");
+        return new VBox(4, header, chart, caption);
+    }
+
+    // Reconstructs "balance immediately after each trade" by walking the chronological trade list BACKWARD from
+    // the known-true current balance, undoing each trade's own totalPaid debit as we go. User.balance has no
+    // history anywhere -- this is a read-only, render-time-only reconstruction, never a new stored field.
+    //
+    // The LAST (most recent) point is always exactly correct, by construction. Everything before it is only
+    // correct if no unrecorded balance-changing event happened in between -- and several real ones exist that
+    // never create a buyer-attributed Trade at all: LMSR close-time winner payouts and MM subsidy debit/leftover
+    // return, Order Book MM initial-allocation debit and close-time holder payouts, and an Order Book seller's
+    // own proceeds in someone else's fill (that Trade's buyerUsername is the other party, so it never surfaces
+    // in the seller's own participation view). Such an event does NOT create a local "flat spot" in the graph --
+    // it bakes a constant offset into that point and propagates it backward through EVERY earlier point too,
+    // since each further backward step only adds a correct trade amount on top of an already-wrong base (traced
+    // by hand against a worked example before writing this: start $1000, buy $100 -> true $900, an unrecorded
+    // $50 credit -> true $950, buy $80 -> true/anchor $870; walking backward from $870 undoes the $80 buy to
+    // $950, labeled "after the first buy" -- but the true value there was $900, a $50 error that would carry
+    // through identically to any point still earlier). Multiple unrecorded events compound. Only the segment
+    // from the most recent unrecorded event up to the anchor is guaranteed correct -- disclosed to the user via
+    // an on-screen caption (buildBalanceHistorySection), not just this comment. A fully complete reconstruction
+    // would need an engine-side balance ledger; correctly out of scope for a bonus feature.
+    private static double[] reconstructBalanceSeries(List<TradeRecordDto> chronological, double currentBalance) {
+        double[] balances = new double[chronological.size()];
+        double runningBalance = currentBalance;
+        for (int i = chronological.size() - 1; i >= 0; i--) {
+            balances[i] = runningBalance;
+            runningBalance += chronological.get(i).totalPaid();
+        }
+        return balances;
     }
 
     // Looks up one event's full status and renders it (details + participate form, pre-bound to username) in the given
@@ -492,6 +592,7 @@ public class MainViewController {
         }
         container.getChildren().add(new Separator());
         container.getChildren().add(buildTradeHistorySection(status.tradeHistory()));
+        container.getChildren().add(buildPriceHistorySection(status));
     }
 
     // One option's summary line: "price X, shares Y" for LMSR (the curve-price concept is real there), "shares Y"
@@ -517,6 +618,67 @@ public class MainViewController {
             }
         }
         return section;
+    }
+
+    // Bonus: Graphs. Builds the event's price-history section: a header plus one line per option, plotting that
+    // option's own price at each of its own trades in chronological order (tradeHistory is newest-first, reversed
+    // here -- charts read left-to-right, oldest-first), or just the header when there's nothing to plot yet --
+    // buildTradeHistorySection's own "No trades yet." right above already covers that case, so no second
+    // placeholder is needed here. Deliberately NOT a reconstructed two-option LMSR curve: a trade on option A
+    // also moves option B's price on the shared liquidity curve, but recomputing that would mean gui reaching
+    // past IEngine/DTOs into engine.domain.lmsr math directly, a layering line this project has never crossed
+    // (unlike the one-line roundToCents duplication precedent, LMSR math isn't "small enough to duplicate").
+    // Each line reflects prices from that option's own trades only -- a disclosed simplification, not a bug.
+    // Uniform across LMSR and Order Book (including mint fills), since Event.addTrade is called identically by
+    // every trading path (TradeExecutor.participate, OrderBookExecutor.executeFill/mintAgainstOppositeOption) --
+    // no method-specific branching needed here. x-axis is trade sequence index, not timestamp/CategoryAxis: a
+    // mint's two Trades share one LocalDateTime.now() call, so a timestamp-keyed category axis risks real
+    // collisions that a sequence index can't have.
+    private static VBox buildPriceHistorySection(EventStatusDto status) {
+        Label header = new Label("Price History:");
+        header.getStyleClass().add("section-header");
+
+        List<TradeRecordDto> chronological = new ArrayList<>(status.tradeHistory());
+        Collections.reverse(chronological);
+        if (chronological.isEmpty()) {
+            return new VBox(4, header);
+        }
+
+        NumberAxis xAxis = new NumberAxis();
+        xAxis.setLabel("Trade #");
+        NumberAxis yAxis = new NumberAxis();
+        yAxis.setLabel("Price");
+        yAxis.setTickLabelFormatter(DOLLAR_AXIS_FORMATTER);
+
+        XYChart.Series<Number, Number> optionOneSeries = new XYChart.Series<>();
+        optionOneSeries.setName(status.optionOneName());
+        addPricePoints(optionOneSeries, chronological, status.optionOneName());
+        XYChart.Series<Number, Number> optionTwoSeries = new XYChart.Series<>();
+        optionTwoSeries.setName(status.optionTwoName());
+        addPricePoints(optionTwoSeries, chronological, status.optionTwoName());
+
+        LineChart<Number, Number> chart = new LineChart<>(xAxis, yAxis);
+        // Rebuilt fresh on every panel refresh, never incrementally updated -- animation would look like
+        // unwanted "live" motion on every reselect, contradicting the redraw-only-on-refresh design.
+        chart.setAnimated(false);
+        // Two separate add() calls, not addAll(a, b) -- addAll's varargs form triggers an unchecked generic-array
+        // warning for a parameterized Series<Number, Number> (a well-known, harmless Java generics/varargs
+        // artifact, but avoiding it costs nothing and keeps the build warning-free).
+        chart.getData().add(optionOneSeries);
+        chart.getData().add(optionTwoSeries);
+        return new VBox(4, header, chart);
+    }
+
+    // Appends one (sequenceIndexWithinThisOption, pricePerShare) point per trade on optionName, in the given
+    // chronological order -- shared by both of buildPriceHistorySection's two series.
+    private static void addPricePoints(XYChart.Series<Number, Number> series, List<TradeRecordDto> chronological, String optionName) {
+        int index = 0;
+        for (TradeRecordDto trade : chronological) {
+            if (trade.optionName().equals(optionName)) {
+                index++;
+                series.getData().add(new XYChart.Data<>(index, trade.pricePerShare()));
+            }
+        }
     }
 
     // Builds the LMSR participate form: a username source (a fixed Label if fixedUsername is given -- the Users tab,
