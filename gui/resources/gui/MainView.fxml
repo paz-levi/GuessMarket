@@ -25,6 +25,8 @@
                 <Insets top="10" right="14" bottom="10" left="14" />
             </padding>
             <Button fx:id="loadFileButton" text="Load File" />
+            <Label text="Color Scheme:" />
+            <ComboBox fx:id="colorSchemeComboBox" prefWidth="140" />
             <Label fx:id="filePathLabel" text="No file loaded" />
             <ProgressIndicator fx:id="loadProgressIndicator" prefWidth="20" prefHeight="20"
                                 visible="false" managed="false" />

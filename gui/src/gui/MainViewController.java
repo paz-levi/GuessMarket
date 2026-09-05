@@ -56,6 +56,9 @@ public class MainViewController {
     private Button loadFileButton;
 
     @FXML
+    private ComboBox<String> colorSchemeComboBox;
+
+    @FXML
     private Label filePathLabel;
 
     @FXML
@@ -106,6 +109,14 @@ public class MainViewController {
     @FXML
     private void initialize() {
         loadFileButton.setOnAction(event -> handleLoadFile());
+
+        // Skins bonus: three schemes, defaulting to "Default" -- selected BY VALUE, not selectFirst()/by index,
+        // so correctness never depends on item order (the filter ComboBoxes elsewhere use selectFirst(), which
+        // would be unsafe here specifically -- the bonus must launch "off," never on one of the two new schemes,
+        // regardless of alphabetical or any other incidental ordering).
+        colorSchemeComboBox.getItems().addAll("Default", "Dark", "High Contrast");
+        colorSchemeComboBox.getSelectionModel().select("Default");
+        colorSchemeComboBox.getSelectionModel().selectedItemProperty().addListener((observable, oldScheme, newScheme) -> applyColorScheme(newScheme));
         eventsListView.setCellFactory(list -> new ListCell<>() {
             @Override
             protected void updateItem(EventSummaryDto event, boolean empty) {
@@ -143,6 +154,23 @@ public class MainViewController {
                 showUserDetails(newSelection.username());
             }
         });
+    }
+
+    // Swaps the Scene's active stylesheet to the chosen scheme -- Scene.getStylesheets() is observable, so
+    // Scene/Parent re-run CSS resolution across the whole existing scene graph on the next pulse, not just newly
+    // created nodes; this is standard JavaFX runtime theme switching, not the app's own custom mechanism.
+    // setAll(...) replaces the list's entire contents in one change, so exactly one scheme is ever active -- never
+    // a multi-file cascade where the "active" theme would depend on list order. The Scene is reached lazily off
+    // the ComboBox itself (colorSchemeComboBox.getScene()), the same pattern handleLoadFile already uses for its
+    // owner Window, rather than threading a Scene reference in from GuessMarketApp.
+    private void applyColorScheme(String scheme) {
+        String resource = switch (scheme) {
+            case "Dark" -> "styles-dark.css";
+            case "High Contrast" -> "styles-high-contrast.css";
+            default -> "styles.css";
+        };
+        colorSchemeComboBox.getScene().getStylesheets().setAll(
+                MainViewController.class.getResource(resource).toExternalForm());
     }
 
     // Opens a FileChooser (never a typed path or a fixed directory) and, on a selection, loads it on a background Task.

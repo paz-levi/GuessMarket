@@ -1,0 +1,103 @@
+/* "High Contrast" color scheme -- Ex2 Skins bonus. A full, self-contained stylesheet (not a delta on
+   styles.css): swapped in wholesale via Scene.getStylesheets().setAll(...), so it must redefine everything on
+   its own. Modeled on the conventional accessibility "high contrast black" look -- black background, yellow
+   text, thick yellow borders, a larger/bolder base font -- a genuinely distinct identity from Dark, not a
+   second arbitrary palette. Same coverage shape as styles-dark.css: the three mandatory rules plus the same
+   small set of container-level rules for visual coherence. */
+
+.root {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-background-color: black;
+}
+
+.label {
+    -fx-text-fill: yellow;
+}
+
+.button {
+    -fx-background-color: black;
+    -fx-text-fill: yellow;
+    -fx-border-color: yellow;
+    -fx-border-width: 2px;
+}
+
+.button:hover {
+    -fx-background-color: #333300;
+}
+
+.header-bar {
+    -fx-alignment: center-left;
+    -fx-background-color: black;
+    -fx-border-color: transparent transparent yellow transparent;
+    -fx-border-width: 0 0 2px 0;
+}
+
+.balance-badge {
+    -fx-font-weight: bold;
+    -fx-font-size: 17px;
+    -fx-text-fill: yellow;
+}
+
+.section-header {
+    -fx-font-weight: bold;
+    -fx-text-fill: yellow;
+}
+
+/* Container-level coverage, beyond the three mandatory rules above. */
+.list-view {
+    -fx-background-color: black;
+    -fx-control-inner-background: black;
+    -fx-border-color: yellow;
+    -fx-border-width: 1px;
+}
+
+.list-cell {
+    -fx-background-color: black;
+    -fx-text-fill: yellow;
+}
+
+.list-cell:filled:selected {
+    -fx-background-color: #333300;
+}
+
+.combo-box {
+    -fx-background-color: black;
+    -fx-text-fill: yellow;
+    -fx-border-color: yellow;
+    -fx-border-width: 1px;
+}
+
+.combo-box .list-cell {
+    -fx-background-color: black;
+    -fx-text-fill: yellow;
+}
+
+.text-field {
+    -fx-background-color: black;
+    -fx-text-fill: yellow;
+    -fx-border-color: yellow;
+    -fx-border-width: 1px;
+}
+
+.split-pane {
+    -fx-background-color: black;
+}
+
+.tab-pane .tab-header-area .tab {
+    -fx-background-color: black;
+    -fx-border-color: yellow;
+}
+
+.tab-pane .tab-header-area .tab:selected {
+    -fx-background-color: #333300;
+}
+
+.tab-pane .tab-label {
+    -fx-text-fill: yellow;
+}
+
+.scroll-pane, .scroll-pane > .viewport {
+    -fx-background-color: black;
+}
