@@ -18,6 +18,7 @@ import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
 import engine.domain.User;
+import engine.domain.lmsr.LmsrMath;
 import exception.IllegalTradeException;
 
 // Covers the commission math for both collection modes, plus the option-number/share-quantity validation rules.
@@ -122,6 +123,55 @@ class TradeExecutorTest {
         assertTrue(Double.isFinite(trade.getTotalPaid()));
         assertTrue(Double.isFinite(trade.getPricePerShare()));
         assertEquals(69_999, event.getOptionOne().getSharesOutstanding(), DELTA);
+    }
+
+    // The exact b=50 scenario investigated this session: option one run up to 2000 shares (a normal purchase,
+    // comfortably under the overflow guard's 700*50=35,000 ceiling) makes a 236-share purchase of option two
+    // mathematically indistinguishable from a $0.00 trade in double precision -- cost(after) and cost(before) are
+    // bit-identical. Confirms the new guard catches this before any mutation, not just that it throws.
+    @Test
+    void rejectsPurchaseThatWouldCostEffectivelyZero() {
+        Event event = newEventWithLiquidityParameter(50);
+        User buyer = newBuyer();
+        TradeExecutor.participate(event, buyer, 1, 2000);
+        double optionTwoSharesBeforeAttempt = event.getOptionTwo().getSharesOutstanding();
+        double accountBalanceBeforeAttempt = event.getMarketMakerAccount().getBalance();
+        double buyerBalanceBeforeAttempt = buyer.getBalance();
+
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, buyer, 2, 236));
+
+        assertEquals(optionTwoSharesBeforeAttempt, event.getOptionTwo().getSharesOutstanding(), DELTA);
+        assertEquals(accountBalanceBeforeAttempt, event.getMarketMakerAccount().getBalance(), DELTA);
+        assertEquals(buyerBalanceBeforeAttempt, buyer.getBalance(), DELTA);
+    }
+
+    // Same shape, option one at 700 shares instead of 2000: the 236-share purchase's real cost is ~0.0046 --
+    // mathematically nonzero, but still rounds to $0.00 at the app's own 2-decimal display. Confirms the guard
+    // catches "effectively $0.00", not only a literal bit-exact 0.0.
+    @Test
+    void rejectsPurchaseThatRoundsToZeroEvenWhenMathematicallyNonzero() {
+        Event event = newEventWithLiquidityParameter(50);
+        User buyer = newBuyer();
+        TradeExecutor.participate(event, buyer, 1, 700);
+
+        assertThrows(IllegalTradeException.class, () -> TradeExecutor.participate(event, buyer, 2, 236));
+    }
+
+    // One more purchase's worth closer to balanced (650 shares instead of 700): the same 236-share purchase now
+    // costs a real, comfortably-above-threshold amount (~$0.0126). Proves the guard has zero false-positive
+    // margin right at the boundary -- a genuine small trade one step away from the rejected cases above still
+    // succeeds normally, with its cost matching LmsrMath's own formula exactly.
+    @Test
+    void allowsPurchaseJustAboveTheZeroCostThreshold() {
+        Event event = newEventWithLiquidityParameter(50);
+        User buyer = newBuyer();
+        TradeExecutor.participate(event, buyer, 1, 650);
+        double expectedCost = LmsrMath.purchaseCost(0, 650, 50, 236);
+
+        Trade trade = TradeExecutor.participate(event, buyer, 2, 236);
+
+        assertEquals(expectedCost, trade.getPricePerShare() * trade.getQuantity(), DELTA);
+        assertEquals(236, event.getOptionTwo().getSharesOutstanding(), DELTA);
     }
 
     // ON_CLOSE: commission is deducted from the winning payout at close time and added to the running commission
@@ -456,6 +506,14 @@ class TradeExecutorTest {
     private static Event newEvent(int commissionRate, CommissionMode commissionMode) {
         return new Event(1, "Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
                 commissionRate, commissionMode, (int) LIQUIDITY_PARAMETER,
+                new MarketMakerAccount(0.0), EventStatus.ACTIVE, TradingMethod.LMSR, null);
+    }
+
+    // Same shape as newEvent, but with an explicit b -- needed for the zero-cost-threshold tests, which must
+    // reproduce the actual investigated b=50 scenario rather than this file's usual fixed b=100.
+    private static Event newEventWithLiquidityParameter(int liquidityParameter) {
+        return new Event(1, "Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
+                10, CommissionMode.ON_PURCHASE, liquidityParameter,
                 new MarketMakerAccount(0.0), EventStatus.ACTIVE, TradingMethod.LMSR, null);
     }
 

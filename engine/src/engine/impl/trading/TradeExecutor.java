@@ -19,6 +19,13 @@ public final class TradeExecutor {
     private static final int MAX_OPTION_NUMBER = 2;
     // Comfortably under Math.exp's ~709.78 overflow point, so the LMSR math never silently produces Infinity/NaN.
     private static final double MAX_SAFE_SHARES_OVER_LIQUIDITY = 700.0;
+    // Below this, a trade's cost rounds to $0.00 at the app's own 2-decimal money formatting -- at an extreme
+    // enough one-sided price skew, LmsrMath.purchaseCost's cost(after)-cost(before) subtraction can round to
+    // exactly 0.0 in double precision (reachable even at the lecturer's own typical b=100, not just a
+    // deliberately tiny b -- see CLAUDE.md's Update Log). Checked against the actual computed cost, not a
+    // pre-guessed shares/b ratio, so it can't false-reject a genuinely tiny-but-real cost and can't miss an
+    // edge case a fixed ratio might not cover exactly.
+    private static final double MIN_MEANINGFUL_COST = 0.005;
 
     private TradeExecutor() {
     }
@@ -39,6 +46,11 @@ public final class TradeExecutor {
         }
         double cost = LmsrMath.purchaseCost(chosenOption.getSharesOutstanding(), otherOption.getSharesOutstanding(),
                 event.getLiquidityParameter(), shareQuantity);
+        if (cost < MIN_MEANINGFUL_COST) {
+            throw new IllegalTradeException("This purchase would cost effectively $0.00 at the current price skew "
+                    + "(liquidity parameter b=" + event.getLiquidityParameter() + ") due to floating-point precision "
+                    + "limits. Try a smaller quantity, or note the market may be too skewed for a trade this size.");
+        }
         double commissionAmount = event.getCommissionMode() == CommissionMode.ON_PURCHASE
                 ? cost * event.getCommissionRate() / 100.0
                 : 0.0;

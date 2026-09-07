@@ -38,12 +38,14 @@ final class CreateEventDialogBuilder {
     // standing principle of not adding a restriction the spec doesn't require.
     private static final int LOW_LIQUIDITY_PARAMETER_THRESHOLD = 50;
 
-    // Verified, not just derived from the general theory: e^100 completely absorbs e^14 in double precision (a
-    // real hand-traced b=5 test event produced two genuinely-$0.00 trades, matching LmsrMath's own formula exactly
-    // under double-precision arithmetic -- see CLAUDE.md's Update Log). double has ~15-17 significant decimal
-    // digits, and e^x needs an exponent gap of roughly ln(10^16) =~ 37 before one term in the LMSR sum completely
-    // swamps the other -- so once one option's shares/b outpaces the other's by roughly that much, the cheaper
-    // option's trades can start pricing at exactly $0.00.
+    // Verified against the real LmsrMath.purchaseCost(), not derived from theory alone -- see CLAUDE.md's Update
+    // Log for the full measurement. The relevant mechanism is cost(after)-cost(before) rounding to exactly 0.0 (a
+    // trade's actual price), NOT the much harder-to-reach price() ratio underflowing (that needs a ~710 exponent
+    // gap). The real, measured threshold for a zero-priced trade is a one-sided shares/b gap of roughly 27-32
+    // (drifting down slightly as b grows) -- e.g. b=50 (this repo's own test_files/ex2-orderbook.xml) hits it at
+    // ~1,507 one-sided shares; b=100 at ~3,000; b=1000 at ~27,000. Every b value is susceptible in principle, just
+    // at proportionally larger one-sided volume -- this is a property of the LMSR implementation generally, not
+    // something unique to a deliberately tiny b.
     private static final String LOW_LIQUIDITY_PARAMETER_WARNING =
             "Note: a very small b makes prices move sharply with even modest trading volume -- once "
             + "purchases substantially exceed b, the losing option's trades may price at exactly $0.00 "
