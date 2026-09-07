@@ -2,6 +2,7 @@ package gui;
 
 import java.util.function.Consumer;
 
+import javafx.application.Platform;
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.scene.control.ButtonBar;
@@ -12,8 +13,11 @@ import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.stage.Stage;
 import javafx.util.StringConverter;
 
 import dto.CommissionMode;
@@ -28,6 +32,24 @@ import exception.GuessMarketException;
 // without committing to a full inter-controller split yet.
 final class CreateEventDialogBuilder {
 
+    // Below this, the caption fires -- "Consider a larger value (e.g. 50+)" is the threshold, not a validation
+    // rule: whether a small b actually causes a $0.00-priced trade depends on future trading volume the creator
+    // can't know at creation time, so this is purely informational (never blocks Create), per CLAUDE.md's own
+    // standing principle of not adding a restriction the spec doesn't require.
+    private static final int LOW_LIQUIDITY_PARAMETER_THRESHOLD = 50;
+
+    // Verified, not just derived from the general theory: e^100 completely absorbs e^14 in double precision (a
+    // real hand-traced b=5 test event produced two genuinely-$0.00 trades, matching LmsrMath's own formula exactly
+    // under double-precision arithmetic -- see CLAUDE.md's Update Log). double has ~15-17 significant decimal
+    // digits, and e^x needs an exponent gap of roughly ln(10^16) =~ 37 before one term in the LMSR sum completely
+    // swamps the other -- so once one option's shares/b outpaces the other's by roughly that much, the cheaper
+    // option's trades can start pricing at exactly $0.00.
+    private static final String LOW_LIQUIDITY_PARAMETER_WARNING =
+            "Note: a very small b makes prices move sharply with even modest trading volume -- once "
+            + "purchases substantially exceed b, the losing option's trades may price at exactly $0.00 "
+            + "due to floating-point precision limits. Consider a larger value (e.g. 50+) unless you "
+            + "specifically want an extremely sensitive market.";
+
     private CreateEventDialogBuilder() {
     }
 
@@ -38,6 +60,9 @@ final class CreateEventDialogBuilder {
     static void show(MainViewController controller, Consumer<EventStatusDto> onCreated) {
         Dialog<ButtonType> dialog = new Dialog<>();
         dialog.setTitle("Create Event");
+        // JavaFX Dialog defaults to non-resizable -- CLAUDE.md's resize rule applies to any window, not just the
+        // primary Stage, so this must be set explicitly, the same as every other resizable window in this app.
+        dialog.setResizable(true);
         dialog.setHeaderText("Define a brand-new event. You'll open it for trading afterward, the same as a loaded one.");
 
         ButtonType createButtonType = new ButtonType("Create", ButtonBar.ButtonData.OK_DONE);
@@ -68,7 +93,19 @@ final class CreateEventDialogBuilder {
         // LMSR's one field.
         TextField liquidityParameterField = new TextField();
         liquidityParameterField.setPromptText("positive integer");
-        VBox lmsrFields = new VBox(6, new Label("Liquidity parameter (b):"), liquidityParameterField);
+        // Soft warning only -- shown live as the creator types, hidden by default (including for an empty/invalid
+        // field) since there's nothing yet to warn about. setManaged(false) alongside setVisible(false) so the
+        // hidden caption doesn't reserve blank space in the layout.
+        Label lowLiquidityCaption = MainViewController.wrappingLabel(LOW_LIQUIDITY_PARAMETER_WARNING);
+        lowLiquidityCaption.setVisible(false);
+        lowLiquidityCaption.setManaged(false);
+        liquidityParameterField.textProperty().addListener((observable, oldText, newText) -> {
+            boolean showWarning = isLowLiquidityParameter(newText);
+            lowLiquidityCaption.setVisible(showWarning);
+            lowLiquidityCaption.setManaged(showWarning);
+        });
+        VBox lmsrFields = new VBox(6, MainViewController.wrappingLabel("Liquidity parameter (b):"),
+                liquidityParameterField, lowLiquidityCaption);
 
         // Order Book's three fields.
         TextField initialField = new TextField();
@@ -77,8 +114,8 @@ final class CreateEventDialogBuilder {
         dField.setPromptText("positive integer");
         CheckBox allowMintCheckBox = new CheckBox("Allow mint");
         VBox orderBookFields = new VBox(6,
-                new Label("Initial share stock:"), initialField,
-                new Label("d (price ceiling basis):"), dField,
+                MainViewController.wrappingLabel("Initial share stock:"), initialField,
+                MainViewController.wrappingLabel("d (price ceiling basis):"), dField,
                 allowMintCheckBox);
 
         // The concrete dynamic-visibility mechanism: swap the container's children wholesale on toggle, the same
@@ -91,19 +128,64 @@ final class CreateEventDialogBuilder {
         form.setHgap(8);
         form.setVgap(8);
         form.setPadding(new Insets(10));
+        // Without this, wrappingLabel's own wrapping (correct in isolation) has nothing stopping the label column
+        // itself from being squeezed arbitrarily thin as the dialog shrinks -- that's what produced the one-
+        // character-per-line regression. minWidth 140 comfortably fits "Commission Rate (%):", the longest label
+        // in this column, on one line at any dialog width down to the floor set below. The field column gets the
+        // grow priority instead, so resizing changes the input fields' width, not the label column's.
+        ColumnConstraints labelColumn = new ColumnConstraints();
+        labelColumn.setMinWidth(140);
+        ColumnConstraints fieldColumn = new ColumnConstraints();
+        fieldColumn.setHgrow(Priority.ALWAYS);
+        form.getColumnConstraints().addAll(labelColumn, fieldColumn);
         int row = 0;
-        form.addRow(row++, new Label("Name:"), nameField);
-        form.addRow(row++, new Label("Description:"), descriptionArea);
-        form.addRow(row++, new Label("Option One Name:"), optionOneField);
-        form.addRow(row++, new Label("Option Two Name:"), optionTwoField);
-        form.addRow(row++, new Label("Market Maker:"), marketMakerComboBox);
-        form.addRow(row++, new Label("Commission Rate (%):"), commissionRateField);
-        form.addRow(row++, new Label("Commission Mode:"), commissionModeComboBox);
-        form.addRow(row++, new Label("Trading Method:"), tradingMethodComboBox);
+        form.addRow(row++, MainViewController.wrappingLabel("Name:"), nameField);
+        form.addRow(row++, MainViewController.wrappingLabel("Description:"), descriptionArea);
+        form.addRow(row++, MainViewController.wrappingLabel("Option One Name:"), optionOneField);
+        form.addRow(row++, MainViewController.wrappingLabel("Option Two Name:"), optionTwoField);
+        form.addRow(row++, MainViewController.wrappingLabel("Market Maker:"), marketMakerComboBox);
+        form.addRow(row++, MainViewController.wrappingLabel("Commission Rate (%):"), commissionRateField);
+        form.addRow(row++, MainViewController.wrappingLabel("Commission Mode:"), commissionModeComboBox);
+        form.addRow(row++, MainViewController.wrappingLabel("Trading Method:"), tradingMethodComboBox);
         form.add(methodSpecificFields, 0, row, 2, 1);
 
         dialog.getDialogPane().setContent(form);
         dialog.getDialogPane().setPrefWidth(420);
+        // A sane practical floor only, not a spec number -- mirrors GuessMarketApp's own setMinWidth/setMinHeight
+        // reasoning on the primary Stage. Without this, dialog.setResizable(true) alone lets the whole dialog be
+        // dragged smaller than the label column's own minWidth (140) plus a usable field width can ever fit,
+        // which would just move the "nowhere left to go" squeeze from the labels onto the fields/button bar
+        // instead of actually fixing it. minWidth matches the existing prefWidth (already sized to comfortably fit
+        // the 140px label column plus a real field width); minHeight is sized to the taller of the two
+        // method-specific field groups (Order Book's three fields + checkbox) so toggling never clips either one.
+        // DialogPane.setMinWidth/setMinHeight alone is NOT enough -- confirmed by a real resize harness, not
+        // assumed: it only sets a layout preference on the DialogPane Region itself, not an enforced floor on the
+        // actual OS-level Window, which a verification harness caught reporting getMinWidth()/getMinHeight() as
+        // 0.0 even after the two calls below. The Window doesn't exist until the dialog is actually shown, so the
+        // real floor has to be applied in setOnShown, mirroring the standard JavaFX pattern for sizing a Dialog's
+        // underlying Stage.
+        dialog.getDialogPane().setMinWidth(420);
+        dialog.getDialogPane().setMinHeight(480);
+        dialog.setOnShown(shownEvent -> Platform.runLater(() -> {
+            // Deferred one further pulse past setOnShown itself -- confirmed necessary, not just cautious: at the
+            // instant setOnShown fires, the Scene's width/height are not yet resolved (still their unset NaN
+            // default) on this render pipeline, which silently poisoned the chrome computation below to NaN, and
+            // Stage.setMinWidth/setMinHeight(NaN) is silently a no-op (every comparison against NaN is false) --
+            // caught only because a resize harness's own "confirm shrinking below the floor is actually clamped"
+            // check false-passed too, for the exact same NaN reason, until it was hardened to check for that.
+            Stage dialogStage = (Stage) dialog.getDialogPane().getScene().getWindow();
+            // Stage width/height include the OS window chrome (title bar, borders); the 420/480 above are
+            // DialogPane content-area sizes, not Stage sizes -- applying the same raw numbers to both would let
+            // the actual content area shrink below the DialogPane's own declared minimum by exactly the chrome's
+            // size. Confirmed a real bug, not a theoretical one: a resize harness caught the DialogPane itself
+            // clipping past the scene bounds (its required 480 height inside an actual 442.7-tall scene) when
+            // this measured-overhead step was missing. Measured at runtime rather than a hardcoded guess, since
+            // chrome size varies by OS/theme/DPI.
+            double chromeWidth = dialogStage.getWidth() - dialogStage.getScene().getWidth();
+            double chromeHeight = dialogStage.getHeight() - dialogStage.getScene().getHeight();
+            dialogStage.setMinWidth(420 + chromeWidth);
+            dialogStage.setMinHeight(480 + chromeHeight);
+        }));
 
         // Kept open across a validation failure (unlike a plain Alert-then-close flow) so the user's already-typed
         // fields survive a retry -- an event filter on the Create button, not the dialog's own result handling, is
@@ -126,6 +208,18 @@ final class CreateEventDialogBuilder {
         });
 
         dialog.showAndWait();
+    }
+
+    // Whether text parses as a positive integer below the low-liquidity threshold -- garbage/blank/non-positive
+    // input simply hides the caption (nothing to warn about yet), the same "hide on parse failure" spirit as every
+    // other soft-feedback element in this dialog.
+    private static boolean isLowLiquidityParameter(String text) {
+        try {
+            int value = Integer.parseInt(text.trim());
+            return value >= 1 && value < LOW_LIQUIDITY_PARAMETER_THRESHOLD;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     // Parses/checks only what the GUI itself must before even calling the engine ("does this parse as a number",

@@ -6,6 +6,46 @@ scannable in seconds.
 
 ---
 
+### `95ebd5a` — 2026-09-05 — Bonus: Create New Event — user creates a brand-new LMSR/Order Book event and becomes its MM, reusing openEvent entirely
+New `IEngine.createEvent(CreateEventRequestDto)` lets an existing, loaded user define a
+brand-new event from scratch and become its MM. New `dto.CreateEventRequestDto` (12-field
+flat bundle, mirroring `SubmitOrderRequestDto`'s style) and new
+`exception.InvalidEventDefinitionException` — neither `XmlValidationException` (explicitly
+file-load-time) nor `IllegalTradeException` (trade legality, not event-definition legality)
+fit a malformed creation request. `EngineImpl.createEvent` validates against
+`EventsFileLoader`'s own exact constants (commission `[0, 90]`, `d > 0`, `initial >= 0`, plus
+the spec's own "b positive integer" rule for LMSR), assigns a fresh id one past the current
+max loaded id (collision-proof by construction, discarded on the next file/state load exactly
+like every other event), and constructs the `Event` with the **identical field-for-field
+branch** `EventsFileLoader.buildEvent` already runs (`liquidityParameter` real + `orderBook`
+null for LMSR; `liquidityParameter` the literal `0` + a real `OrderBookMarket` for Order
+Book) — confirmed by pasting `Event`'s actual 12-parameter constructor and
+`EventsFileLoader.buildEvent`'s actual two return statements side by side before writing this
+method, not from memory.
+
+**Zero changes to `openEvent`, `TradeExecutor`, `OrderBookExecutor`, or `EventsFileLoader`:**
+a created event only ever reaches `NOT_STARTED`; the existing, untouched Open Event flow is
+what funds/activates it. Proven, not just designed that way: a verification harness created
+one LMSR and one Order Book event, then fed both through the real `openEvent` →
+`participateInEvent`/`submitOrder` path successfully, plus every rejection case (blank
+fields, commission out of range, non-positive `b`/`d`, negative `initial`, unknown MM
+username, no-file-loaded, and `initial=0` explicitly *accepted*).
+
+New `gui.CreateEventDialogBuilder` — the app's first real `Dialog<ButtonType>` (every prior
+dialog is a display-only `Alert`) — builds the form (a trading-method `ComboBox` toggle swaps
+an inner `VBox`'s children between the LMSR/Order Book field groups) and drives it from a new
+`createEventButton` in the Events tab's own toolbar row, above the filter bar (gated by the
+existing reveal-on-load `eventsSplitPane` mechanism, no new gating code). A validation
+failure is caught by an event filter on the Create button, keeping the dialog open with input
+intact rather than closing it. Checked specifically, since the LMSR/Order Book field groups'
+`TextField`s are retained (not recreated) across the toggle: the submit handler re-reads
+`tradingMethod` live from the `ComboBox` at submit time and its `if`/`else` parse block
+physically only calls `Integer.parseInt` on the currently-selected branch's fields, so a
+stale value sitting in the hidden group's field is never read into the wrong `DTO` field.
+`MainViewController.formatCommissionMode`/`formatTradingMethod` widened from `private` to
+package-private so the new class can reuse them instead of duplicating the display strings —
+the only touch to otherwise-working existing code.
+
 ### `7ca6ffe` — 2026-09-05 — Bonus: Skins — runtime Dark/High Contrast color-scheme switcher, defaults to off per spec
 Third Ex1/Ex2 bonus alongside the two save/load-state ones: a header `ComboBox` ("Color
 Scheme:") next to Load File, switching between "Default", "Dark", and "High Contrast" at

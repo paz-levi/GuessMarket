@@ -441,6 +441,24 @@ reason. Default is a hand-written CSS file; revisit only after explicit confirma
     mechanisms consult disjoint books (same-option opposite-side vs. cross-option same-side),
     and neither can add liquidity to the book the other reads mid-flight — so a single
     sequential pass is complete, not just simpler. Flag as a README assumption.
+11. **Resolved — confirmed as an understood, accepted numerical characteristic of the existing
+    `LmsrMath` implementation, not a new bug, not something being fixed.** A small liquidity
+    parameter `b` (now creatable directly via the Create New Event bonus, where it was
+    previously only ever set by a lecturer-provided XML file) can genuinely price a trade at
+    exactly `$0.00`, not as a display-rounding artifact but as real double-precision
+    floating-point behavior: `LmsrMath`'s cost formula sums two `e^x` terms, and once one
+    option's `shares / b` outpaces the other's by roughly `ln(10^16) ≈ 37` (double has ~15-17
+    significant decimal digits), the larger term completely absorbs the smaller one — e.g.
+    `e^100` swamps `e^14` exactly, to the last bit. Verified by hand-tracing all 5 trades of a
+    real `b=5` test event end-to-end and confirming every number, including the two genuinely
+    `$0.00` trades, matches the LMSR formula precisely under double-precision arithmetic — not
+    merely asserted from the general theory. Per this project's own standing principle of not
+    adding a restriction the spec doesn't require, this is **not validated against or blocked**
+    anywhere (`LmsrMath`, `EngineImpl.validateCreateEventRequest`, and the loader all still only
+    require `b > 0`) — a creator may deliberately want an extremely sensitive small-`b` market.
+    The Create Event dialog instead shows a soft, non-blocking informational caption
+    (`CreateEventDialogBuilder`) when the entered `b` is below 50, explaining the mechanism in
+    plain terms and suggesting (not requiring) a larger value.
 
 ---
 
