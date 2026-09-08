@@ -11,9 +11,29 @@ flowchart TD
 
     subgraph GUI["gui module (JavaFX, the only module that ships for Ex2)"]
         GuessMarketApp["GuessMarketApp (active entry point, run.bat)"]
-        MainViewController["MainViewController"]
-        OrderBookPanelBuilder["OrderBookPanelBuilder"]
-        CreateEventDialogBuilder["CreateEventDialogBuilder"]
+        MainViewController["MainViewController (shell, implements TabCoordinator)"]
+
+        subgraph GUITABS["gui.tabs (public — reusable whole tabs)"]
+            TabCoordinator["TabCoordinator (interface)"]
+            EventsTabController["EventsTabController"]
+            UsersTabController["UsersTabController"]
+        end
+
+        subgraph GUICOMPONENTS["gui.components (public — DTO to Node builders)"]
+            EventStatusPanelBuilder["EventStatusPanelBuilder"]
+            EventActionsPanelBuilder["EventActionsPanelBuilder"]
+            OrderBookPanelBuilder["OrderBookPanelBuilder"]
+            CreateEventDialogBuilder["CreateEventDialogBuilder"]
+            PriceHistoryChartBuilder["PriceHistoryChartBuilder"]
+            BalanceHistoryChartBuilder["BalanceHistoryChartBuilder"]
+            UsernamePicker["UsernamePicker"]
+        end
+
+        subgraph GUICOMMON["gui.common (public — text and dialogs)"]
+            Formatters["Formatters"]
+            Labels["Labels"]
+            Dialogs["Dialogs"]
+        end
     end
 
     subgraph ENGINE["engine module"]
@@ -118,15 +138,29 @@ flowchart TD
     Main -->|"reads/prints"| DTO
     GuessMarketApp -->|"createDefault(), hands to controller"| IEngine
     GuessMarketApp -->|"FXMLLoader.load() builds"| MainViewController
-    MainViewController -->|"calls every IEngine method (load/list/get/participate/open/close/submitOrder/save/load)"| IEngine
-    MainViewController -->|"reads/builds"| DTO
-    MainViewController -->|"catches"| EXC
-    MainViewController -->|"delegates ORDER_BOOK panels to"| OrderBookPanelBuilder
-    OrderBookPanelBuilder -->|"calls submitOrder() via controller.engine"| IEngine
-    OrderBookPanelBuilder -->|"reads/builds"| DTO
-    MainViewController -->|"delegates the Create Event dialog to"| CreateEventDialogBuilder
-    CreateEventDialogBuilder -->|"calls createEvent() via controller.engine"| IEngine
-    CreateEventDialogBuilder -->|"reads/builds"| DTO
+    MainViewController -->|"loadEventsFile() on a background Task"| IEngine
+    MainViewController -.->|"implements"| TabCoordinator
+    MainViewController -->|"fx:include injects; setEngine/setCoordinator"| EventsTabController
+    MainViewController -->|"fx:include injects; setEngine/setCoordinator"| UsersTabController
+    EventsTabController -->|"listEvents()/getEventStatus()"| IEngine
+    UsersTabController -->|"listUsers()/getUser()/getEventStatus()"| IEngine
+    EventsTabController -->|"refreshEvents()/refreshUsers()"| TabCoordinator
+    UsersTabController -->|"refreshEvents()/refreshUsers()"| TabCoordinator
+    EventsTabController --> GUICOMPONENTS
+    UsersTabController --> GUICOMPONENTS
+    EventActionsPanelBuilder -->|"participateInEvent()/openEvent()/closeEvent()"| IEngine
+    EventActionsPanelBuilder -->|"delegates ORDER_BOOK panels to"| OrderBookPanelBuilder
+    OrderBookPanelBuilder -->|"submitOrder()"| IEngine
+    CreateEventDialogBuilder -->|"createEvent()"| IEngine
+    UsernamePicker -->|"listUsers()"| IEngine
+    EventStatusPanelBuilder --> PriceHistoryChartBuilder
+    GUICOMPONENTS -->|"refreshEvents()/refreshUsers() after any mutation"| TabCoordinator
+    GUICOMPONENTS -->|"reads/builds"| DTO
+    GUICOMPONENTS --> GUICOMMON
+    GUICOMPONENTS -->|"catches"| EXC
+    GUITABS --> GUICOMMON
+    GUICOMMON -->|"formats"| DTO
+    Dialogs -->|"unwraps"| GuessMarketException
 ```
 
 ---
@@ -2013,3 +2047,85 @@ grader unzips the submission on a machine with no JavaFX pre-installed.
   already space-constrained `FlowPane`.
 - **What it connects to:** `createEventButton` is wired in `MainViewController.initialize()`
   to `handleCreateEventClick()`, which opens `CreateEventDialogBuilder`.
+
+## Pre-Exercise-3 Refactor — `gui` split into a reusable public surface
+
+**Why this happened at all (the real driver, not code size):** the Ex3 inventory found that
+`gui`'s presentation layer was *unreachable from any other module*. Everything shared was
+package-private and accessed by direct same-package reach-in — `controller.engine` (a field),
+`controller.buildUsernameComboBox()`, `controller.refreshEventsList()`,
+`MainViewController.wrappingLabel/formatMoney/formatDollars/...`. Exercise 3's spec requires a
+**new module** for its client app that "can and should be based on the components you already
+have from Exercise 2," and a separate module cannot touch any of that without illegally sharing
+the `gui` package. `MainViewController` being 914 lines was the symptom; the access model was
+the blocker. Zero behavior change, zero engine changes — purely structural.
+
+#### `gui.common` — `Formatters`, `Labels`, `Dialogs` (new, public)
+- **What it is:** Every user-facing string this app derives from a DTO or enum (`Formatters`,
+  including the shared `DOLLAR_AXIS` chart-axis converter and the `nullableDollars` "—"
+  convention); the two `Label` shapes built repeatedly (`Labels.wrapping` for anything
+  unbounded per the resize rule, `Labels.sectionHeader` for the `.section-header` idiom that
+  was previously repeated inline ~12 times); and every modal message (`Dialogs` — both
+  `showError` overloads plus the two trade confirmations).
+- **Why it exists:** These are pure, engine-agnostic, controller-free functions — the most
+  obviously reusable tier. A separate module gets identical wording and identical error-dialog
+  shaping for free instead of re-deriving them.
+- **What it connects to:** Used by everything in `gui.components` and `gui.tabs`. Depends only
+  on `dto`/`exception` and JavaFX — never on a controller.
+
+#### `gui.components` — the DTO-to-Node builders (new package; two classes moved into it)
+- **What it is:** `EventStatusPanelBuilder` (the read-only event display + trade history),
+  `EventActionsPanelBuilder` (every control that *acts* on an event — open, participate,
+  close — dispatched by status), `OrderBookPanelBuilder` and `CreateEventDialogBuilder` (both
+  moved here from package `gui` and made public), `PriceHistoryChartBuilder` and
+  `BalanceHistoryChartBuilder` (the Graphs bonus), and `UsernamePicker`.
+- **Why it exists:** `EventActionsPanelBuilder` in particular had to become a shared component
+  rather than tab-owned: both the Events tab's detail panel and the Users tab's per-event
+  sub-panel call it (previously both called `MainViewController.buildActionControl`). Every
+  builder now takes `IEngine` and a `TabCoordinator` as explicit parameters instead of reaching
+  into a host controller — that parameter change *is* the decoupling.
+- **What it connects to:** Calls `IEngine` directly for its own action (`participateInEvent`,
+  `openEvent`, `closeEvent`, `submitOrder`, `createEvent`, `listUsers`), reports every failure
+  through `Dialogs`, and asks the `TabCoordinator` to refresh afterward.
+
+#### `gui.tabs` — `TabCoordinator`, `EventsTabController`, `UsersTabController` (new, public)
+- **What it is:** The per-tab `<fx:include>` sub-components, each owning only its own list,
+  filters, details panel and reveal-on-load state — plus `TabCoordinator`, the narrow interface
+  the tabs use to say "data I don't own just changed."
+- **Why `TabCoordinator` exists, and whose idea it is:** the lecturer's JavaFX materials teach
+  the `<fx:include>` split and its `fx:id` → `XxxController` injection convention, but
+  **explicitly do not cover inter-controller communication** — ` docs-reference/lecture-notes-javafx.md`
+  records that gap as the exact reason the split was deferred until now. **The coordinator
+  interface is this project's own design choice, not something attributable to the materials.**
+  It was chosen over an event bus because it is a *direct, behavior-preserving extraction* of
+  what the code already did: `submitPurchase`/`handleOpenEventClick`/`handleCloseEventClick`/
+  `submitOrder` each already called `refreshEventsList(); refreshUsersList();` back-to-back, so
+  a two-method interface maps 1:1 onto existing call sites, which an event bus's subscription
+  and ordering semantics would not. Two methods rather than one `refreshAll()` because real
+  call sites genuinely differ — a filter change or a new event refreshes events only.
+- **What it connects to:** `MainViewController` implements it and routes each call to whichever
+  tab owns that data, keeping the wiring a tree (shell → tabs), never a cycle. Because it's an
+  interface rather than the concrete shell class, a different module's shell can host these same
+  tabs by implementing it.
+
+#### `MainViewController` — reduced from 914 lines to the shell alone
+- **What it is:** Now only the header bar (file loading `Task`, color-scheme switching), the
+  `<fx:include>` wiring, and the `TabCoordinator` implementation.
+- **What it connects to:** `setEngine(IEngine)` keeps its exact previous signature and calling
+  convention (async/HTTP conversion is deliberately Ex3's own first step, not prep work) and now
+  also propagates the engine down to both tab controllers. Safe by construction: nested
+  `<fx:include>` controllers are built and `initialize()`d *before* the including controller's
+  own `initialize()`, so both sub-controllers exist by the time either `initialize()` or
+  `setEngine(...)` runs.
+
+#### `MainView.fxml` + new `tabs/EventsTab.fxml`, `tabs/UsersTab.fxml`
+- **What it is:** The shell FXML keeps the `BorderPane`/header/`TabPane`; each tab's former
+  `StackPane` subtree moved verbatim into its own file with its own `fx:controller`.
+- **Gotcha worth recording:** FXML is XML, so `--` is illegal *inside a comment*. Two new
+  explanatory comments used `--` as a dash and produced a `LoadException` at runtime (not at
+  compile time — `build.bat` never parses FXML). Caught immediately by the wiring harness rather
+  than at launch; the original file had avoided this only by using em dashes throughout.
+- **What it connects to:** `build.bat` needed **no change** — it already compiles
+  `dir /s /b gui\src\*.java` and copies resources with `xcopy /s`, both recursive, so the new
+  packages and the `tabs/` resource subdirectory are picked up automatically (verified in the
+  packaged `gui.jar`).

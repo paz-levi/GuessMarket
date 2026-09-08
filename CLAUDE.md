@@ -134,25 +134,33 @@ same interface next.
 - **`gui` is the JavaFX `Application`** (module split from `ui` — see Section 0). FXML +
   Controller vs. building scenes in code is not mandated by the spec — pick one and stay
   consistent.
-- **`MainViewController` decomposition — deliberately deferred, not overlooked.** The
-  lecturer's JavaFX materials teach splitting complex screens into `<fx:include>`
-  sub-components (with a specific `fx:id`→`XxxController` field-naming convention). This
-  controller is growing into a god-class (file load, both tabs' lists/details/forms) and
-  will grow more once Order Book UI is added. Considered and explicitly **not** done now:
-  a real `<fx:include>` split needs a real inter-controller communication design (opening an
-  event from the Events tab must also refresh the Users tab, and vice versa) — that design
-  question doesn't get any cheaper by waiting, so there's no rush cost to deferring it, only
-  the cost of code volume. **Compromise, active now:** new large UI blocks (starting with
-  Order Book's book display / order-submission UI) go into plain static-method Java helper
-  classes (e.g. `OrderBookPanelBuilder`, not FXML, not a separate `Controller`) that
-  `MainViewController` calls — this keeps the controller from growing further without
-  committing to the harder inter-controller design before the full picture (incl. Order
-  Book UI) is known. **Revisit trigger, made concrete (not "if time allows"):** before
-  starting Exercise 3, not during Exercise 2's polish stage — Ex3 builds its client-server
-  split on top of whatever `gui` looks like at that point, so the bottleneck only gets worse
-  the longer this waits past Ex2. Decided explicitly on 2026-09-03: finish and submit Ex2
-  first, unchanged; do the real `<fx:include>` split as the first thing before Ex3 work
-  begins, not squeezed into Ex2's remaining ~9 days.
+- **`MainViewController` decomposition — DONE, 2026-09-08, after Ex2 was submitted
+  (`ex2-complete-with-3-bonuses`) and before any Ex3 work began**, exactly as the previous
+  revisit trigger required. *(This entry previously recorded the decision to defer; it now
+  records what was actually done. The compromise it described — new UI blocks going into
+  plain static-method helper classes like `OrderBookPanelBuilder` rather than new FXML
+  controllers — held for all of Ex2 and those classes survive the split unchanged in role,
+  just relocated and made public.)*
+  **The real driver turned out not to be file size.** The Ex3 inventory found that `gui`'s
+  presentation layer was unreachable from any other module: everything shared was
+  package-private and reached into directly (`controller.engine`, `controller.refreshEventsList()`,
+  `MainViewController.formatMoney/...`). Ex3's spec mandates a **new module** for its client
+  app based on Ex2's components, which that access model made impossible. So the refactor did
+  both halves: the `<fx:include>` per-tab split **and** promotion of the reusable pieces to a
+  real public surface — `gui.common` (`Formatters`, `Labels`, `Dialogs`), `gui.components`
+  (the DTO→Node builders, including the two pre-existing helper classes), and `gui.tabs`
+  (`EventsTabController`, `UsersTabController`, `TabCoordinator`).
+  **Inter-controller communication — resolved, and it is this project's own design, not the
+  lecturer's.** The materials teach the `<fx:include>` convention but explicitly do not cover
+  cross-controller communication (see ` docs-reference/lecture-notes-javafx.md`). The chosen
+  mechanism is a narrow `TabCoordinator` interface implemented by the shell and injected into
+  each tab, so no tab ever references another and the wiring stays a tree. Picked over an
+  event bus specifically because it is a behavior-preserving 1:1 extraction of the
+  `refreshEventsList(); refreshUsersList();` pairs the code already had.
+  **Out of scope by explicit decision:** converting `IEngine` calls to async/HTTP. The spec's
+  own "how to start" section names that as Ex3's first implementation step, so
+  `setEngine(IEngine)` and the synchronous calling convention were left exactly as-is rather
+  than guessing at a shape before the real HTTP client module exists.
 
 ### Existing structure — confirmed from `ARCHITECTURE.md`, read it before adding anything
 
@@ -483,6 +491,14 @@ reason. Default is a hand-written CSS file; revisit only after explicit confirma
 ---
 
 ## 9. UI Polish Backlog — deferred wording/display fixes, for the polish stage
+
+> **Note (2026-09-08):** the entries below are a historical record of Ex2-era fixes and are
+> deliberately left as written. Some name classes/methods that the pre-Ex3 refactor has since
+> moved or renamed — e.g. `MainViewController.wrappingLabel` is now `gui.common.Labels.wrapping`,
+> `OrderBookPanelBuilder.showOrderConfirmation` is now `gui.common.Dialogs.showOrderConfirmation`,
+> and `OrderBookPanelBuilder`/`CreateEventDialogBuilder` now live in `gui.components`. The
+> *behavior* each entry describes is unchanged; see `ARCHITECTURE.md`'s "Pre-Exercise-3 Refactor"
+> section for the current locations.
 
 Not implemented now (functionality first, per the confirmed functionality-only grading) —
 collected here as they're found during manual testing, so nothing gets forgotten by the time

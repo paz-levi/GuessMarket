@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ListView?>
+<?import javafx.scene.control.ScrollPane?>
+<?import javafx.scene.control.SplitPane?>
+<?import javafx.scene.layout.StackPane?>
+<?import javafx.scene.layout.VBox?>
+
+<!-- The Users tab's content: the user list on the left, one user's details on the right. Same reveal-on-load
+     gating as the Events tab: the SplitPane starts hidden behind a "No file loaded" placeholder until
+     UsersTabController.revealLoadedContent() flips it. -->
+<StackPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
+           fx:controller="gui.tabs.UsersTabController">
+    <SplitPane fx:id="usersSplitPane" dividerPositions="0.48" visible="false" managed="false">
+        <ListView fx:id="usersListView" />
+        <ScrollPane fitToWidth="true">
+            <VBox fx:id="userDetailsBox" spacing="10">
+                <padding>
+                    <Insets top="14" right="14" bottom="14" left="14" />
+                </padding>
+                <Label text="Select a user to view details" />
+            </VBox>
+        </ScrollPane>
+    </SplitPane>
+    <Label fx:id="usersNoFileLabel" text="No file loaded — load a file to begin." />
+</StackPane>
