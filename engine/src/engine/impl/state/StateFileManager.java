@@ -24,7 +24,7 @@ public final class StateFileManager {
     }
 
     // Writes every event and user (in insertion order) to <filePath>.gmstate as a single object graph, preserving reference identity.
-    public static void save(Map<Integer, Event> events, Map<String, User> users, String filePath) {
+    public static void save(Map<String, Event> events, Map<String, User> users, String filePath) {
         File file = resolveFile(filePath);
         EngineStateSnapshot snapshot = new EngineStateSnapshot(new ArrayList<>(events.values()), new ArrayList<>(users.values()));
         // fileOut is its own resource (rather than inlined into the ObjectOutputStream constructor call) so it is still
@@ -37,7 +37,7 @@ public final class StateFileManager {
         }
     }
 
-    // Reads a previously saved state file and rebuilds fresh id -> event and name -> user maps; throws before any caller state is touched.
+    // Reads a previously saved state file and rebuilds fresh name -> event and name -> user maps; throws before any caller state is touched.
     public static LoadedState load(String filePath) {
         File file = resolveFile(filePath);
         if (!file.isFile()) {
@@ -68,11 +68,11 @@ public final class StateFileManager {
         return new File(filePath + STATE_FILE_EXTENSION);
     }
 
-    // Rebuilds the id -> event map from a flat event list, in insertion order.
-    private static Map<Integer, Event> toEventMap(List<Event> events) {
-        Map<Integer, Event> eventMap = new LinkedHashMap<>();
+    // Rebuilds the name -> event map from a flat event list, in insertion order.
+    private static Map<String, Event> toEventMap(List<Event> events) {
+        Map<String, Event> eventMap = new LinkedHashMap<>();
         for (Event event : events) {
-            eventMap.put(event.getId(), event);
+            eventMap.put(event.getName(), event);
         }
         return eventMap;
     }

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import dto.OrderSide;
+import dto.TransactionType;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
@@ -44,7 +45,7 @@ public final class OrderBookExecutor {
         }
         if (price > market.getMaxOrderPrice() + PRICE_EPSILON) {
             throw new IllegalTradeException("Order price " + price + " exceeds the maximum of "
-                    + market.getMaxOrderPrice() + " (d - 0.01) for event id " + event.getId() + ".");
+                    + market.getMaxOrderPrice() + " (d - 0.01) for event \"" + event.getName() + "\".");
         }
 
         OptionBook book = market.getBook(optionNumber);
@@ -129,14 +130,14 @@ public final class OrderBookExecutor {
             double commission = event.getCommissionMode() == CommissionMode.ON_CLOSE
                     ? gross * event.getCommissionRate() / 100.0
                     : 0.0;
-            holder.credit(gross - commission);
+            holder.credit(gross - commission, TransactionType.WINNINGS_PAYOUT, event.getName());
             totalCommission += commission;
         }
 
         if (totalCommission > 0) {
             User marketMaker = users.get(event.getMarketMakerUsername());
             if (marketMaker != null) {          // defensive; EventsFileLoader guarantees this in practice
-                marketMaker.credit(totalCommission);
+                marketMaker.credit(totalCommission, TransactionType.COMMISSION_RECEIVED, event.getName());
             }
             event.getMarketMakerAccount().addCommissionCollected(totalCommission);
         }
@@ -179,8 +180,8 @@ public final class OrderBookExecutor {
             // No commission on a mint -- flagged assumption, see CLAUDE.md Section 8: it isn't a trade between two
             // existing parties, and charging commission on top (or carving it out of d) would break the exact
             // "both payments sum to d" invariant the account credit below relies on.
-            restingUser.debit(restingPayment);
-            trader.debit(incomingPayment);
+            restingUser.debit(restingPayment, TransactionType.MINT_PURCHASE, event.getName());
+            trader.debit(incomingPayment, TransactionType.MINT_PURCHASE, event.getName());
             event.getMarketMakerAccount().credit(restingPayment + incomingPayment); // == mintQuantity * d, exactly
 
             otherBook.addHolding(restingUser.getName(), mintQuantity);
@@ -240,8 +241,8 @@ public final class OrderBookExecutor {
                 ? value * event.getCommissionRate() / 100.0
                 : 0.0;
 
-        buyer.debit(value + commission);
-        seller.credit(value);
+        buyer.debit(value + commission, TransactionType.ORDER_BUY_FILL, event.getName());
+        seller.credit(value, TransactionType.ORDER_SELL_PROCEEDS, event.getName());
         if (commission > 0) {
             // Lecturer-confirmed (forum reply quoting Appendix B): on-purchase commission for an ordinary fill
             // credits the MM's own personal balance directly, in real time -- unlike LMSR, which credits the event
@@ -250,7 +251,7 @@ public final class OrderBookExecutor {
             // TradeExecutor.returnLeftoverSubsidyToMarketMaker's identical "resolve MM by username" pattern.
             User marketMaker = users.get(event.getMarketMakerUsername());
             if (marketMaker != null) {          // defensive; EventsFileLoader guarantees this in practice
-                marketMaker.credit(commission);
+                marketMaker.credit(commission, TransactionType.COMMISSION_RECEIVED, event.getName());
             }
             event.getMarketMakerAccount().addCommissionCollected(commission);
         }
@@ -267,7 +268,7 @@ public final class OrderBookExecutor {
     // Same contract as TradeExecutor's own check: the chosen option number must be 1 or 2.
     private static void validateOptionNumber(Event event, int optionNumber) {
         if (optionNumber < MIN_OPTION_NUMBER || optionNumber > MAX_OPTION_NUMBER) {
-            throw new IllegalTradeException("Event id " + event.getId() + ": option number must be "
+            throw new IllegalTradeException("Event \"" + event.getName() + "\": option number must be "
                     + MIN_OPTION_NUMBER + " or " + MAX_OPTION_NUMBER + ", got " + optionNumber + ".");
         }
     }

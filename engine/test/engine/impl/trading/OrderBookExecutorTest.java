@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import dto.EventStatus;
 import dto.OrderSide;
+import dto.TransactionType;
 import dto.TradingMethod;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
@@ -656,7 +657,7 @@ class OrderBookExecutorTest {
         // allowMint defaults to false above for every pre-mint-stage test; mint tests opt in explicitly.
         Fixture(int commissionRate, CommissionMode commissionMode, boolean allowMint) {
             OrderBookMarket market = new OrderBookMarket(0, D, allowMint);
-            event = new Event(1, "Test OB Event", "An order book event",
+            event = new Event("Test OB Event", "An order book event",
                     new EventOption("Yes"), new EventOption("No"),
                     commissionRate, commissionMode, 0, new MarketMakerAccount(0.0),
                     EventStatus.ACTIVE, TradingMethod.ORDER_BOOK, market);
@@ -682,7 +683,7 @@ class OrderBookExecutorTest {
             event.getOptionOne().addShares(pairs);
             event.getOptionTwo().addShares(pairs);
             event.getMarketMakerAccount().credit(pairs * D);
-            users.get(MARKET_MAKER_NAME).debit(pairs * D);
+            users.get(MARKET_MAKER_NAME).debit(pairs * D, TransactionType.EVENT_OPEN_FUNDING, event.getName());
         }
 
         void close(int winningOptionNumber) {

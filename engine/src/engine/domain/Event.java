@@ -14,7 +14,6 @@ public final class Event implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final int id;
     private final String name;
     private final String description;
     private final EventOption optionOne;
@@ -28,7 +27,7 @@ public final class Event implements Serializable {
     private final List<Trade> tradeHistory;
     // The option declared as the winner when this event is closed; null while ACTIVE.
     private EventOption winningOption;
-    // The username of this event's assigned market maker; null until EventsFileLoader's GM-users pass assigns it.
+    // The username of this event's assigned market maker: whoever uploaded the file this event came from.
     private String marketMakerUsername;
     // Which trading mechanism this event uses. Never null.
     private final TradingMethod tradingMethod;
@@ -36,11 +35,10 @@ public final class Event implements Serializable {
     // before Order Book existed). liquidityParameter is the mirror-image field: meaningful only for LMSR.
     private final OrderBookMarket orderBook;
 
-    public Event(int id, String name, String description, EventOption optionOne, EventOption optionTwo,
+    public Event(String name, String description, EventOption optionOne, EventOption optionTwo,
                  int commissionRate, CommissionMode commissionMode, int liquidityParameter,
                  MarketMakerAccount marketMakerAccount, EventStatus status,
                  TradingMethod tradingMethod, OrderBookMarket orderBook) {
-        this.id = id;
         this.name = name;
         this.description = description;
         this.optionOne = optionOne;
@@ -53,10 +51,6 @@ public final class Event implements Serializable {
         this.tradeHistory = new ArrayList<>();
         this.tradingMethod = tradingMethod;
         this.orderBook = orderBook;
-    }
-
-    public int getId() {
-        return id;
     }
 
     public String getName() {
@@ -134,7 +128,7 @@ public final class Event implements Serializable {
         return marketMakerUsername;
     }
 
-    // Assigns this event's market maker; called exactly once by EventsFileLoader while cross-referencing GM-users.
+    // Assigns this event's market maker; called exactly once, by whichever path created the event (file upload or createEvent).
     public void assignMarketMaker(String username) {
         this.marketMakerUsername = username;
     }

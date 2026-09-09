@@ -504,7 +504,7 @@ class TradeExecutorTest {
     }
 
     private static Event newEvent(int commissionRate, CommissionMode commissionMode) {
-        return new Event(1, "Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
+        return new Event("Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
                 commissionRate, commissionMode, (int) LIQUIDITY_PARAMETER,
                 new MarketMakerAccount(0.0), EventStatus.ACTIVE, TradingMethod.LMSR, null);
     }
@@ -512,7 +512,7 @@ class TradeExecutorTest {
     // Same shape as newEvent, but with an explicit b -- needed for the zero-cost-threshold tests, which must
     // reproduce the actual investigated b=50 scenario rather than this file's usual fixed b=100.
     private static Event newEventWithLiquidityParameter(int liquidityParameter) {
-        return new Event(1, "Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
+        return new Event("Test Event", "A test event", new EventOption("Yes"), new EventOption("No"),
                 10, CommissionMode.ON_PURCHASE, liquidityParameter,
                 new MarketMakerAccount(0.0), EventStatus.ACTIVE, TradingMethod.LMSR, null);
     }

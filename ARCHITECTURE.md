@@ -59,6 +59,7 @@ flowchart TD
             EventOption["EventOption"]
             Trade["Trade"]
             User["User"]
+            Transaction["Transaction (Ex3 ledger line)"]
             MarketMakerAccount["MarketMakerAccount"]
             CommissionMode["CommissionMode"]
             subgraph LMSR["engine.domain.lmsr"]
@@ -90,6 +91,8 @@ flowchart TD
             ParticipantDto["ParticipantDto"]
             EventFilterDto["EventFilterDto"]
             CreateEventRequestDto["CreateEventRequestDto"]
+            TransactionRecordDto["TransactionRecordDto"]
+            TransactionType["TransactionType"]
         end
 
         subgraph EXC["exception"]
@@ -103,6 +106,8 @@ flowchart TD
             UnauthorizedMarketMakerException["UnauthorizedMarketMakerException"]
             UserNotFoundException["UserNotFoundException"]
             InvalidEventDefinitionException["InvalidEventDefinitionException"]
+            UserAlreadyExistsException["UserAlreadyExistsException"]
+            InvalidDepositException["InvalidDepositException"]
         end
     end
 
@@ -110,7 +115,7 @@ flowchart TD
     IEngine -.->|"implemented by"| EngineImpl
     EngineImpl -->|"loadEventsFile() delegates to"| EventsFileLoader
     EventsFileLoader -->|"parses GM-events into"| Event
-    EventsFileLoader -->|"parses GM-users into, cross-references MM against"| User
+    EventsFileLoader -->|"assigns the uploading user as MM of each"| Event
     Event --> EventOption
     Event --> MarketMakerAccount
     Event --> CommissionMode
@@ -125,7 +130,8 @@ flowchart TD
     EngineImpl -->|"submitOrder()/closeEvent() (Order Book) delegate to"| OrderBookExecutor
     OrderBookExecutor -->|"mutates"| Event
     OrderBookExecutor -->|"credits/debits"| User
-    EngineImpl -->|"openEvent()/listUsers()/getUser() also read/mutate"| User
+    EngineImpl -->|"openEvent()/listUsers()/getUser()/registerUser()/depositFunds() also read/mutate"| User
+    User -->|"every debit/credit records one"| Transaction
     EngineImpl -->|"createEvent() constructs a fresh"| Event
     EngineImpl -->|"maps Event/User to"| DTO
     EngineImpl -->|"throws"| EXC
@@ -2129,3 +2135,175 @@ the blocker. Zero behavior change, zero engine changes — purely structural.
   `dir /s /b gui\src\*.java` and copies resources with `xcopy /s`, both recursive, so the new
   packages and the `tabs/` resource subdirectory are picked up automatically (verified in the
   packaged `gui.jar`).
+
+---
+
+## Exercise 3 — Stage 1: engine changes only (no HTTP, no servlets, no new modules)
+
+**Why this stage exists, and why it is first.** Ex3 turns the single-process Ex2 app into a
+Tomcat-hosted server with many JavaFX clients. Three things in the engine made that impossible
+as written, and all three are completely independent of Tomcat/servlets, so they land before any
+of the transport work: events were keyed by a numeric `id` the Ex3 schema no longer has,
+`loadEventsFile` replaced everything instead of accumulating, and users came out of the file's
+`GM-users` element, which the Ex3 schema deleted. Verified against the real
+`GM-EX3-Schema_xsd.xml` and both real sample files (see ` docs-reference/ex3-plan.md`): those are
+the *only* schema changes — `GM-option` is still `maxOccurs="2"`, so **nothing is generalized to
+n options**.
+
+**Deliberately not in this stage:** anything HTTP (servlets, the WAR, the new client module), the
+`Task`-based async conversion of `IEngine` calls (client-side, Stage 3 in the plan), and the
+`gui`/`ui` modules — both stop compiling at the end of this stage, which is expected and fixed
+later. `engine` depends on neither, so `engine`'s own tests build and run on their own
+(`test.bat`: **88/88 green**, up from 77 — no test deleted or weakened).
+
+### Event identity: the numeric `id` is gone, the name *is* the identity
+
+#### `engine.domain.Event` — `id` field, getter, and constructor parameter removed
+- **What changed:** `Event(String name, String description, ...)`. There is no `getId()` any more.
+- **Why the field was removed outright rather than kept unused:** every reader was checked first —
+  `EngineImpl`'s map key and three DTO mappers, `EventsFileLoader`'s within-file dedupe and error
+  messages, `StateFileManager.toEventMap`, three error-message interpolations in the two
+  executors, and one assertion in `SaveLoadStateTest`. **Nothing ever computed anything from it**
+  — no ordering, no arithmetic, and its one real cross-reference (Ex2's `GM-market-maker`
+  `<event id="..."/>`) is deleted by this same stage. With no `id` in the Ex3 schema, a retained
+  field could only ever hold a synthetic placeholder that looks meaningful in a debugger and in a
+  `.gmstate` file while meaning nothing.
+- **What it connects to:** `EngineImpl.events` is now `Map<String, Event>` keyed by
+  `event.getName()`; `StateFileManager`/`LoadedState` are keyed the same way, so the Ex1
+  Save/Load-State bonus keeps working unchanged in behavior.
+
+#### `IEngine` — four `int eventId` parameters became `String eventName`
+- `getEventStatus`, `participateInEvent`, `closeEvent`, `openEvent`. `SubmitOrderRequestDto`'s
+  `int eventId` became `String eventName` (it was the only DTO with no name field of its own).
+- **`EventSummaryDto`, `EventStatusDto` and `UserEventParticipationDto` simply lost their
+  `int eventId` component** — all three already carried `eventName` beside it, so this is a field
+  *deletion*, not a rename: every consumer already had the replacement in hand.
+- `EventNotFoundException`'s message is name-based (`No event named "X" is currently loaded.`),
+  mirroring `UserNotFoundException`'s existing wording.
+
+### File loading accumulates instead of replacing
+
+#### `EngineImpl.loadEventsFile(String filePath, String uploaderUsername)`
+- **What it is:** each valid file **adds** its events to whatever is already loaded; `events.clear()`
+  is gone, and so is the users-replacement half (users are no longer file content at all).
+- **Two-pass, all-or-nothing:** every event name in the file is checked against the live map
+  *before* any of them is inserted, so a file containing one duplicate adds nothing at all — not
+  even its genuinely-new events. That preserves Ex1's own contract that an invalid file never
+  damages what is already loaded, now extended from "doesn't overwrite" to "doesn't half-load".
+- **The uploader must be a registered user** (`UserNotFoundException`): they become MM of every
+  event in their file, and an event whose MM is not a real account could never be opened or
+  authorized.
+
+#### `EventsFileLoader.load(String filePath, String uploaderUsername)` → `List<Event>`
+- **What changed:** `extractUsers`/`buildUser`/`assignMarketMakerEvents`/
+  `requireEveryEventHasAMarketMaker` and every `GM-users` / `GM-user` / `initial-cash` /
+  `GM-market-maker` / `id` constant are **deleted** — `GM-users` does not exist in the Ex3 schema.
+  MM assignment is now one loop over the parsed events assigning `uploaderUsername`.
+- **`LoadedFile` is deleted** (`engine/src/engine/impl/xml/LoadedFile.java`): it existed only to
+  bundle events with the users that no longer come from files, so `load()` returns `List<Event>`
+  directly.
+- **Validation reverted to Exercise 1's rule set, per the spec.** ` docs-reference/exercise1-requirements.md`
+  lines 153-159 list exactly three: the file exists and ends `.xml`; every event has its own
+  unique identity (**now the name**, which inherits the rule the id used to carry, enforced both
+  within one file and across all files); `0 <= commission <= 90`. Every Ex2 *user* rule is gone
+  (duplicate user name, `initial-cash > 0`, MM references an existing event, exactly one MM per
+  event).
+- **Interpretation worth recording for the README:** the loader's *structural* checks are **kept**
+  — exactly two `GM-option` entries, a `GM-method` containing LMSR or order-book, and Order Book
+  `d > 0` / `initial >= 0`. These are not Ex2 user rules; they are integrity checks without which
+  the event cannot be constructed at all (`d = 0` divides by zero, and `d - 0.01` would be a
+  negative price ceiling). An event with a blank `name` is likewise rejected, since the name is
+  now the identity.
+
+### New engine capabilities
+
+#### `IEngine.registerUser(String username)` / `exception.UserAlreadyExistsException`
+- **What it is:** the login screen's backing call. Trims the name, rejects blank, rejects a name
+  already taken. A new user starts at **0.00** — the Ex3 schema has no `initial-cash`, and the
+  spec keeps "register" and "deposit funds" as two separate capabilities, so no starting grant is
+  invented here.
+
+#### `IEngine.depositFunds(String username, double amount)` / `exception.InvalidDepositException`
+- **What it is:** adds a positive amount to a user's own balance, recorded as one ledger line.
+- **Deliberately exempt from the blocked-user check, and this resolves an open question.**
+  `User.isBlocked()` is *derived* from `balance < 0`, so a deposit that brings the balance back to
+  zero unblocks the user automatically, with no new state. Refusing deposits from a blocked user
+  would strand them permanently. Ex2's "blocked forever" therefore becomes "blocked until you top
+  up" for free — ` docs-reference/ex3-plan.md` open question 1, answered mechanically rather than
+  by adding a rule. **Flag as a README assumption:** the spec does not say this outright.
+
+#### The per-user transaction ledger — `engine.domain.Transaction`, `dto.TransactionType`, `dto.TransactionRecordDto`
+- **What it is:** `Transaction(int sequence, LocalDateTime timestamp, TransactionType type,
+  String eventName, double amount, double balanceAfter)`, held by `User` as an append-only list.
+  `amount` is **signed** (positive credited them, negative was taken); `eventName` is null only
+  for a `DEPOSIT`; `sequence` is 1-based per user, which gives a stable order when several lines
+  share a timestamp (one order can fill repeatedly inside the same microsecond) and keeps
+  user-facing numbering 1-based as Exercise 1 still requires. `balanceAfter` makes the ledger
+  self-verifying: the newest line's value *is* the balance the user holds.
+- **Where entries are created — the one real design decision.** Every balance change in the
+  system already funnelled through exactly two methods, so the ledger is written *by* them:
+  `User.debit(amount, type, eventName)` / `User.credit(amount, type, eventName)`. **Deleting the
+  one-argument forms is the enforcement mechanism** — after this change it is impossible to move
+  a user's money without producing a line, and the compiler enumerated all eleven call sites for
+  us. The rejected alternative was a ledger service `EngineImpl` appends to: the MM's per-fill
+  commission is credited deep inside `OrderBookExecutor.executeFill`, which never returns to
+  `EngineImpl` per fill, so `EngineImpl` cannot be the choke point.
+- **The eleven sites and their types:** `depositFunds` → `DEPOSIT`; `openEvent` →
+  `EVENT_OPEN_FUNDING`; `TradeExecutor.participate` → `LMSR_PURCHASE`; `TradeExecutor.payWinners`
+  and `OrderBookExecutor.close` → `WINNINGS_PAYOUT`; `TradeExecutor.returnLeftoverSubsidyToMarketMaker`
+  → `LEFTOVER_SUBSIDY_RETURNED`; `OrderBookExecutor.executeFill` → `ORDER_BUY_FILL` /
+  `ORDER_SELL_PROCEEDS` / `COMMISSION_RECEIVED`; `OrderBookExecutor.mintAgainstOppositeOption` →
+  `MINT_PURCHASE` (both sides).
+- **Two consequences recorded on purpose rather than discovered later:**
+  (1) `MarketMakerAccount` — the per-*event* account — gets no ledger lines; the ledger is
+  per-user by definition, and `EventStatusDto` already reports that account's balance and its
+  running commission counter. (2) **LMSR on-purchase commission produces no `COMMISSION_RECEIVED`
+  line for the MM**: under LMSR it rides inside the event account and reaches them at close as
+  `LEFTOVER_SUBSIDY_RETURNED`. That asymmetry against Order Book is the existing,
+  lecturer-verified behavior (CLAUDE.md Section 8 item 2), not a gap — worth a README sentence.
+- **Exposure:** `UserDetailDto` is **widened** with `List<TransactionRecordDto> transactions`
+  (newest-first, the same convention `toTradeRecordDtosNewestFirst` already uses). **No new
+  `IEngine` method** — `getUser(username)` already *is* the per-user detail call, and widening
+  rather than duplicating follows the `EventStatusDto` precedent from CLAUDE.md Section 2.
+- **One enum, not a domain/dto twin.** `TransactionType` lives in `dto` and is used by
+  `engine.domain` directly, exactly as `Event` already imports `dto.EventStatus` and
+  `dto.TradingMethod`. The domain/dto `CommissionMode` pair is a historical special case, not the
+  pattern to copy.
+- **Serialization:** `User.transactions` is deliberately non-final. A `User` deserialized from an
+  Ex2-era `.gmstate` file arrives with it null (the field did not exist when that file was
+  written), and a one-line lazy initializer restores it — the same null-guard already applied to
+  `Trade.buyerUsername` and `EngineStateSnapshot.getUsers()`.
+
+### Empty state is no longer an error
+
+- **What changed:** `listEvents()`, `listEvents(filter)` and `listUsers()` return **empty lists**
+  instead of throwing `InvalidCommandStateException("No events file has been loaded yet.")`, and
+  `findEvent`/`getUser` no longer pre-check emptiness (an unknown name is simply
+  `EventNotFoundException` / `UserNotFoundException`).
+- **Why:** users are no longer file-derived, and events accumulate on a server that legitimately
+  starts empty and serves many clients — "nothing loaded" is an ordinary state a client renders
+  as an empty table, not a command-state error. `saveState` keeps its guard and is now the only
+  remaining user of `InvalidCommandStateException`.
+- `createEvent` (the Ex2 bonus) survives the stage: it drops the `users.isEmpty()` guard and the
+  `max(id)+1` generator, and gains the same system-wide duplicate-name rejection
+  (`InvalidEventDefinitionException`) that `loadEventsFile` enforces. Deleting the bonus outright
+  is a separate later call, not a side effect of this one.
+
+### Tests
+
+- **`EngineImplTest`** — every existing test keeps asserting exactly what it asserted before, but
+  the setup changed shape: users are registered and funded at runtime, then the fixture is
+  uploaded by one of them, who is therefore MM of **every** event in it (previously the file gave
+  event 1 to Tikva and event 2 to Avrum). `listEventsWithFilterThrowsWhenNothingLoaded` was
+  *rewritten*, not removed, to assert the new empty-list contract. Filter assertions now compare
+  event names instead of ids.
+- **New coverage:** registration (empty account, duplicate name refused), deposits (credited,
+  non-positive refused, unknown user refused), a blocked user depositing their way back to
+  unblocked, accumulation across two files, whole-file rejection on a duplicate name (both against
+  already-loaded events and within one file), an unregistered uploader, and the ledger itself for
+  a full LMSR cycle and for an Order Book fill.
+- **New fixture `test_files/ex3-duplicate-name.xml`** — two events sharing one name, for the
+  within-one-file half of the uniqueness rule. Note that `test_files/single.xml` (an Ex1-era file
+  with no `GM-users` element at all) becomes loadable again *because* of the reverted validation,
+  which is exactly why the accumulation test uses it.
+- `SaveLoadStateTest` additionally asserts a user's ledger survives the save/load round-trip.

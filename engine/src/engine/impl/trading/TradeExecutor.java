@@ -3,6 +3,7 @@ package engine.impl.trading;
 import java.time.LocalDateTime;
 import java.util.Map;
 
+import dto.TransactionType;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
@@ -63,7 +64,7 @@ public final class TradeExecutor {
         // Same totalPaid value credited above, not recomputed, so the MM account and the buyer's balance can never drift apart.
         // No affordability pre-check here, per CLAUDE.md Section 4: the trade completes even if it leaves the buyer negative;
         // User.isBlocked() picks that up automatically from this point on.
-        buyer.debit(totalPaid);
+        buyer.debit(totalPaid, TransactionType.LMSR_PURCHASE, event.getName());
 
         Trade trade = new Trade(chosenOption, shareQuantity, cost / shareQuantity, commissionAmount, totalPaid,
                 LocalDateTime.now(), buyer.getName());
@@ -116,7 +117,7 @@ public final class TradeExecutor {
             double commission = event.getCommissionMode() == CommissionMode.ON_CLOSE
                     ? gross * event.getCommissionRate() / 100.0
                     : 0.0;
-            winner.credit(gross - commission);
+            winner.credit(gross - commission, TransactionType.WINNINGS_PAYOUT, event.getName());
         }
     }
 
@@ -129,17 +130,22 @@ public final class TradeExecutor {
     // means the account lands at precisely 0.0, not an approximation: x - x is always exactly 0.0 in IEEE 754.
     private static void returnLeftoverSubsidyToMarketMaker(Event event, Map<String, User> users) {
         double leftover = event.getMarketMakerAccount().getBalance();
+        // Both moves below are no-ops at exactly 0.0, so skipping them changes no balance -- it only keeps a
+        // "$0.00 returned" line out of the MM's ledger for an event that happened to settle to nothing.
+        if (leftover == 0.0) {
+            return;
+        }
         event.getMarketMakerAccount().debit(leftover);
         User marketMaker = users.get(event.getMarketMakerUsername());
-        if (marketMaker != null) {          // defensive; EventsFileLoader guarantees this in practice
-            marketMaker.credit(leftover);
+        if (marketMaker != null) {          // defensive; the uploader who became MM is always a registered user
+            marketMaker.credit(leftover, TransactionType.LEFTOVER_SUBSIDY_RETURNED, event.getName());
         }
     }
 
     // Shared by participate and close — the chosen/winning option number must be 1 or 2.
     private static void validateOptionNumber(Event event, int optionNumber) {
         if (optionNumber < MIN_OPTION_NUMBER || optionNumber > MAX_OPTION_NUMBER) {
-            throw new IllegalTradeException("Event id " + event.getId() + ": option number must be "
+            throw new IllegalTradeException("Event \"" + event.getName() + "\": option number must be "
                     + MIN_OPTION_NUMBER + " or " + MAX_OPTION_NUMBER + ", got " + optionNumber + ".");
         }
     }

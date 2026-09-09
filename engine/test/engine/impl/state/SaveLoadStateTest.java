@@ -19,11 +19,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import dto.EventStatus;
 import dto.TradingMethod;
+import dto.TransactionType;
 import engine.domain.CommissionMode;
 import engine.domain.Event;
 import engine.domain.EventOption;
 import engine.domain.MarketMakerAccount;
 import engine.domain.Trade;
+import engine.domain.Transaction;
 import engine.domain.User;
 import exception.StateFileException;
 
@@ -40,23 +42,23 @@ class SaveLoadStateTest {
     // winningOption/Trade.option aliasing that only survives because the whole graph is serialized in one call.
     @Test
     void roundTripsEveryFieldAndPreservesObjectIdentity() {
-        Map<Integer, Event> original = buildFixtureEvents();
+        Map<String, Event> original = buildFixtureEvents();
         Map<String, User> originalUsers = buildFixtureUsers();
         String path = tempDir.resolve("mystate").toString();
 
         StateFileManager.save(original, originalUsers, path);
         LoadedState loaded = StateFileManager.load(path);
-        Map<Integer, Event> loadedEvents = loaded.events();
+        Map<String, Event> loadedEvents = loaded.events();
 
         assertEquals(original.keySet(), loadedEvents.keySet());
 
-        Event loadedActive = loadedEvents.get(1);
-        assertEventFieldsMatch(original.get(1), loadedActive);
+        Event loadedActive = loadedEvents.get("Election");
+        assertEventFieldsMatch(original.get("Election"), loadedActive);
         assertEquals(EventStatus.ACTIVE, loadedActive.getStatus());
         assertNull(loadedActive.getWinningOption());
 
-        Event loadedClosed = loadedEvents.get(2);
-        assertEventFieldsMatch(original.get(2), loadedClosed);
+        Event loadedClosed = loadedEvents.get("Weather");
+        assertEventFieldsMatch(original.get("Weather"), loadedClosed);
         assertEquals(EventStatus.CLOSED, loadedClosed.getStatus());
         assertTrue(loadedClosed.getMarketMakerAccount().getBalance() < 0);
 
@@ -73,6 +75,17 @@ class SaveLoadStateTest {
         assertEquals(originalUsers.get("Avrum").getBalance(), loadedUsers.get("Avrum").getBalance(), DELTA);
         assertEquals(originalUsers.get("Tikva").getBalance(), loadedUsers.get("Tikva").getBalance(), DELTA);
         assertTrue(loadedUsers.get("Tikva").isBlocked());
+
+        // The Ex3 transaction ledger is part of a user's state, so it has to survive the round-trip exactly as
+        // balances and blocked-ness already do -- otherwise a restored user would show a balance no line explains.
+        Transaction restored = loadedUsers.get("Avrum").getTransactions().get(0);
+        Transaction expected = originalUsers.get("Avrum").getTransactions().get(0);
+        assertEquals(expected.getSequence(), restored.getSequence());
+        assertEquals(expected.getType(), restored.getType());
+        assertEquals(expected.getEventName(), restored.getEventName());
+        assertEquals(expected.getTimestamp(), restored.getTimestamp());
+        assertEquals(expected.getAmount(), restored.getAmount(), DELTA);
+        assertEquals(expected.getBalanceAfter(), restored.getBalanceAfter(), DELTA);
     }
 
     // Loading a path with no saved file at it must fail clearly, not crash.
@@ -95,7 +108,6 @@ class SaveLoadStateTest {
 
     // Field-by-field comparison; domain classes have no equals/hashCode, so every getter is checked individually.
     private static void assertEventFieldsMatch(Event expected, Event actual) {
-        assertEquals(expected.getId(), actual.getId());
         assertEquals(expected.getName(), actual.getName());
         assertEquals(expected.getDescription(), actual.getDescription());
         assertEquals(expected.getCommissionRate(), actual.getCommissionRate());
@@ -124,19 +136,22 @@ class SaveLoadStateTest {
         assertEquals(expected.getBuyerUsername(), actual.getBuyerUsername());
     }
 
-    // Builds a two-user fixture: one with a positive balance, one already blocked (negative balance) -- exercises isBlocked() round-tripping too.
+    // Builds a two-user fixture: one with a positive balance and a real ledger line behind it, one already blocked
+    // (negative balance) -- exercises isBlocked() and the transaction ledger round-tripping too.
     private static Map<String, User> buildFixtureUsers() {
         Map<String, User> users = new LinkedHashMap<>();
-        users.put("Avrum", new User("Avrum", 1000.0));
+        User avrum = new User("Avrum", 1000.0);
+        avrum.debit(93.0, TransactionType.LMSR_PURCHASE, "Election");
+        users.put("Avrum", avrum);
         users.put("Tikva", new User("Tikva", -50.0));
         return users;
     }
 
     // Builds a two-event fixture: one ACTIVE with a trade and a positive balance, one CLOSED with a trade and a negative (unclamped) balance.
-    private static Map<Integer, Event> buildFixtureEvents() {
-        Map<Integer, Event> events = new LinkedHashMap<>();
-        events.put(1, buildActiveEvent());
-        events.put(2, buildClosedEvent());
+    private static Map<String, Event> buildFixtureEvents() {
+        Map<String, Event> events = new LinkedHashMap<>();
+        events.put("Election", buildActiveEvent());
+        events.put("Weather", buildClosedEvent());
         return events;
     }
 
@@ -147,7 +162,7 @@ class SaveLoadStateTest {
         MarketMakerAccount account = new MarketMakerAccount(69.31);
         account.credit(62.01);
         account.addCommissionCollected(31.0);
-        Event event = new Event(1, "Election", "Who wins?", optionOne, optionTwo,
+        Event event = new Event("Election", "Who wins?", optionOne, optionTwo,
                 50, CommissionMode.ON_PURCHASE, 100, account, EventStatus.ACTIVE, TradingMethod.LMSR, null);
         event.addTrade(new Trade(optionOne, 100, 0.62, 31.0, 93.0, LocalDateTime.of(2026, 1, 1, 10, 0), "Avrum"));
         return event;
@@ -161,7 +176,7 @@ class SaveLoadStateTest {
         account.credit(5.0);
         account.debit(20.0);
         account.addCommissionCollected(2.0);
-        Event event = new Event(2, "Weather", "Will it rain?", optionOne, optionTwo,
+        Event event = new Event("Weather", "Will it rain?", optionOne, optionTwo,
                 20, CommissionMode.ON_CLOSE, 50, account, EventStatus.ACTIVE, TradingMethod.LMSR, null);
         event.addTrade(new Trade(optionOne, 10, 0.5, 0.0, 5.0, LocalDateTime.of(2026, 1, 2, 12, 30), "Tikva"));
         event.close(optionOne);
