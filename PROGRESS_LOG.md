@@ -6,6 +6,89 @@ scannable in seconds.
 
 ---
 
+### `5c89c3a` — 2026-09-09 — Ex3 Stage 1: event identity id->name, accumulating file loads, user registration/deposits, per-user transaction ledger (88/88 tests)
+Engine only — no HTTP, no servlets, no new modules; those need Tomcat set up first and this stage
+is fully independent of them. Three blockers to the client-server split, all independent of
+transport, grounded in the real `GM-EX3-Schema_xsd.xml` and both real sample files: the schema
+deleted the event `id`, deleted `GM-users` entirely, and nothing else — `GM-option` is still
+`maxOccurs="2"`, so **nothing was generalized to n options** (`Event`, `EventStatusDto`,
+`OrderBookMarket`, `LmsrMath` untouched in shape).
+
+**Identity: `Event.id` removed outright, not left unused.** Every reader was checked before
+deciding: `EngineImpl`'s map key and three DTO mappers, `EventsFileLoader`'s within-file dedupe
+and ~10 error messages, `StateFileManager.toEventMap`, three message interpolations in the two
+executors, one assertion in `SaveLoadStateTest`. **Nothing ever computed anything from it** — no
+ordering, no arithmetic, and its one real cross-reference (Ex2's `GM-market-maker`
+`<event id="..."/>`) is deleted by this same stage. With no `id` in the Ex3 schema a retained
+field could only ever hold a synthetic placeholder that looks meaningful in a debugger and in a
+`.gmstate` file while meaning nothing. `EngineImpl.events` and `StateFileManager`/`LoadedState`
+are now keyed by name, so the Ex1 Save/Load-State bonus keeps working unchanged. `IEngine`'s four
+`int eventId` params became `String eventName`; `EventSummaryDto`/`EventStatusDto`/
+`UserEventParticipationDto` **lost** their `int eventId` component rather than renaming it — all
+three already carried `eventName` beside it, so every consumer already had the replacement in
+hand. Only `SubmitOrderRequestDto` needed a real field change.
+
+**Loading accumulates, and rejects a duplicate name whole-file.** `events.clear()` is gone;
+`loadEventsFile(filePath, uploaderUsername)` adds to what is already loaded, and the uploader
+becomes MM of every event in their own file (`GM-users` parsing, the MM cross-reference
+validation, and `LoadedFile` are all deleted — `EventsFileLoader.load` now returns
+`List<Event>`). Validation reverted to **Exercise 1's** rule set per the spec —
+` docs-reference/exercise1-requirements.md` lines 153-159 list exactly three: file exists and ends
+`.xml`; every event has its own unique identity (**now the name**, inheriting the rule the id
+carried, enforced both within one file and across all files); `0 <= commission <= 90`. Every Ex2
+user rule is gone. Atomicity is structural, not incidental: the loader never touches live state
+at all, and `loadEventsFile` runs a **pure `containsKey` pass over every event before the first
+`events.put`** — so `multiple.xml` (two names colliding with `ex2-small.xml`, one genuinely new)
+adds nothing at all, including the new one. Asserted with an exact-list comparison, not just a
+thrown-exception check.
+**Interpretation flagged for the README:** the loader's *structural* checks are deliberately kept
+(exactly two `GM-option`s, a `GM-method` containing LMSR or order-book, Order Book `d > 0` /
+`initial >= 0`) — not Ex2 user rules, but integrity checks without which the event cannot be
+constructed at all (`d = 0` divides by zero and makes `d - 0.01` a negative price ceiling).
+
+**Ledger: enforced by the compiler, not by discipline.** Every balance change in the system
+already funnelled through exactly two methods, so the ledger is written *by* them —
+`User.debit(amount, type, eventName)` / `User.credit(...)`. **Deleting the one-argument forms is
+the enforcement mechanism**: after this change it is impossible to move a user's money without
+producing a line, and the compiler enumerated all eleven call sites rather than a human hunting
+for them. New `engine.domain.Transaction` (1-based `sequence`, `timestamp`, `dto.TransactionType`,
+nullable `eventName`, **signed** `amount`, `balanceAfter`) exposed through a widened
+`UserDetailDto` — no new `IEngine` method, since `getUser` already *is* the per-user detail call
+(same widen-don't-duplicate precedent as `EventStatusDto`). `sequence` exists because
+`LocalDateTime.now()` genuinely collides when one order fills repeatedly inside a microsecond.
+`TransactionType` is one enum used by domain and dto both, following `Event`'s own existing
+`dto.EventStatus`/`dto.TradingMethod` imports — the domain/dto `CommissionMode` pair is a
+historical special case, not the pattern to copy. `User.transactions` is deliberately non-final:
+an Ex2-era `.gmstate` deserializes it as null, and a lazy initializer repairs it, mirroring the
+guards already used for `Trade.buyerUsername` and `EngineStateSnapshot.getUsers()`.
+
+**Two design notes to disclose in the README, both deliberate:** (1) **deposits are exempt from
+the blocked-user check.** `User.isBlocked()` is *derived* from `balance < 0`, so a deposit that
+brings the balance back to zero unblocks the user mechanically, with no new state; refusing
+deposits from a blocked user would strand them permanently. That turns Ex2's "blocked forever"
+into "blocked until you top up" for free and answers ` docs-reference/ex3-plan.md` open question 1
+without adding a rule — but the spec does not say it outright, so it is our reading. (2) **LMSR
+on-purchase commission still produces no `COMMISSION_RECEIVED` line for the MM** — under LMSR it
+rides inside the event account and reaches them at close as `LEFTOVER_SUBSIDY_RETURNED`, unlike
+Order Book where it hits their personal balance per fill. That asymmetry is **existing,
+lecturer-verified behavior (CLAUDE.md Section 8 item 2), not something this stage introduced**;
+it is called out because the ledger is the first place a grader can actually *see* it.
+
+Also relaxed, since users are no longer file-derived and events accumulate on a server that
+legitimately starts empty: `listEvents`/`listEvents(filter)`/`listUsers` return empty lists
+instead of throwing `InvalidCommandStateException`, leaving `saveState` its only remaining user.
+Verification: clean rebuild, **88/88 tests pass** (was 77) — none deleted or weakened;
+`listEventsWithFilterThrowsWhenNothingLoaded` was *rewritten* to assert the new empty-list
+contract, and `EngineImplTest`'s setup now registers and funds its users at runtime, which also
+means one uploader is MM of both fixture events where the file used to split them. New tests
+cover registration, deposits, the blocked-then-unblocked path, accumulation, both halves of the
+duplicate-name rule (new fixture `test_files/ex3-duplicate-name.xml`), an unregistered uploader,
+and the ledger itself for a full LMSR cycle and an Order Book fill; `SaveLoadStateTest` now also
+asserts a ledger survives the round-trip. `gui` (16 errors) and `ui` (8) do not compile at the end
+of this stage — expected, fixed in a later stage — and every error was checked to be an
+`eventId()` accessor or `loadEventsFile` arity, i.e. nothing else in the engine's surface moved
+underneath them.
+
 ### `7fdc929` — 2026-09-08 — Pre-Ex3 refactor: split MainViewController into gui.tabs/gui.components/gui.common, promote presentation layer to a public, module-reusable API via TabCoordinator
 **The goal was reachability, not file size.** The Ex3 inventory found the real blocker: `gui`'s
 presentation layer was unreachable from any other module, because everything shared was

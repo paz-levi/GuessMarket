@@ -47,6 +47,22 @@ many events from many sources. Every 2-option assumption in engine/dto/gui stays
 2. A **new module for the Ex3 client app** — explicitly "can and should build on the
    components you already have from Exercise 2."
 
+### HTTP client library — resolved, not zero-dependency by default anymore
+
+Confirmed 2026-09-09: the course website itself provides `okhttp-4_9_1.jar` + its
+dependencies (`okio-2_8_0.jar`, `kotlin-stdlib-1_4_10.jar` + `-common`,
+`annotations-13_0.jar`) for the client-server part. This is a direct, concrete signal from
+the lecturer — not an inferred permission the way AtlantaFX's ambiguity was in Ex2 — so the
+zero-third-party-dependency default from Ex1/Ex2 does NOT carry over unchanged here.
+
+**Decision: use OkHttp for the JavaFX client's HTTP calls to the Tomcat server.** It belongs
+in the new Ex3 client module only — the server side has no need for an outbound HTTP client
+(servlets receive requests; `gson` alone covers JSON on that side). Also worth checking
+directly whether OkHttp's own async call support / WebSocket support is what the lecturer's
+"server to client updates" topic (from the 3.9.26 lecture) actually demonstrates, once that
+material is available — it would settle the polling-vs-push design question outright rather
+than leaving it as an open choice.
+
 ---
 
 ## 2. What we already have that carries over
@@ -78,9 +94,15 @@ Grounded in the spec's own "how to start" guidance, which says: master the cours
 example first, then get Ex2's basics running client-server (file load + events display, each
 engine call becoming an HTTP call), then do the user side.
 
-**Stage 0 — Groundwork (before any feature work)**
-- Work through the course's summary example properly. The spec explicitly recommends this
-  first; skipping it to save time is a false economy for a 4-week, 35% exercise.
+**Stage 0 — Groundwork**
+- Tomcat 11 installed and verified locally (done, 2026-09-09).
+- The course's own "summary example" (client-server demo) was announced in class but its
+  recording isn't posted yet, no ETA. Re-assessed 2026-09-09: this is very likely generic
+  teaching material for HOW to build a servlet/client-server app, not a second source of
+  Guess-Market-specific requirements -- the actual requirements are already fully covered by
+  the written Ex3 spec section, the real XSD, and both real sample files, all independently
+  verified. Decision: don't block on it. Watch it as a sanity-check if/when it's posted, not
+  a prerequisite. If it later reveals a genuinely different expected pattern, revisit then.
 - Set up the two new modules + Tomcat deploy + a `gson.jar`-bundled WAR that deploys clean.
 - Prove the round-trip with one trivial endpoint before building anything real.
 
@@ -108,20 +130,20 @@ engine call becoming an HTTP call), then do the user side.
   the FX thread (today's controllers call `engine.xxx()` synchronously straight from click
   handlers, which would freeze the UI for the duration of each request).
   Chosen `Task` over callbacks/`CompletableFuture` because:
-  - It's already in this codebase and working — `runLoad`'s file-load flow uses exactly this
-    shape (`setOnSucceeded`/`setOnFailed`/`new Thread(task).start()`), so it's not a new API
-    to learn or a second concurrency style competing with an existing one.
-  - `setOnSucceeded`/`setOnFailed` already run on the FX thread automatically — no manual
-    `Platform.runLater` at every call site, and no risk of a background thread touching UI.
-  - CLAUDE.md Section 2 already records that `Task` belongs in the UI layer, not `engine`
-    (lecturer-confirmed) — this stays consistent with that.
-  **Implementation note:** wrap it in one shared helper (e.g. `runAsync(callable, onSuccess)`)
-  rather than repeating ~10 lines of Task boilerplate across every handler — there are dozens
-  of call sites (Buy/Open/Close/Submit/every refresh), and consistency across them is the
-  whole point of deciding this up front.
-  *(Not a deadlock problem — no circular lock waiting is involved; it's simple UI-thread
-  blocking. And no special server-side asynchrony is needed: Tomcat already handles each
-  request on its own thread.)*
+    - It's already in this codebase and working — `runLoad`'s file-load flow uses exactly this
+      shape (`setOnSucceeded`/`setOnFailed`/`new Thread(task).start()`), so it's not a new API
+      to learn or a second concurrency style competing with an existing one.
+    - `setOnSucceeded`/`setOnFailed` already run on the FX thread automatically — no manual
+      `Platform.runLater` at every call site, and no risk of a background thread touching UI.
+    - CLAUDE.md Section 2 already records that `Task` belongs in the UI layer, not `engine`
+      (lecturer-confirmed) — this stays consistent with that.
+      **Implementation note:** wrap it in one shared helper (e.g. `runAsync(callable, onSuccess)`)
+      rather than repeating ~10 lines of Task boilerplate across every handler — there are dozens
+      of call sites (Buy/Open/Close/Submit/every refresh), and consistency across them is the
+      whole point of deciding this up front.
+      *(Not a deadlock problem — no circular lock waiting is involved; it's simple UI-thread
+      blocking. And no special server-side asynchrony is needed: Tomcat already handles each
+      request on its own thread.)*
 
 **Stage 4 — Client: user screen + polling**
 - User details, other-users list (name/balance/isMM), deposit funds, transaction ledger.
@@ -141,13 +163,77 @@ how much was hands-off). Only after Ex3 is submitted-ready.
 
 ---
 
-## 4. Open questions worth resolving early
+## 4. Confirmed from the 3.9.26 final lecture (recording obtained, transcribed 2026-09-09)
+
+The lecture covered exactly what the email promised: URL/redirect pitfalls, Gson, Push vs.
+Polling, and a full summary example ("Online Chat v3") that the lecturer states directly is
+Ex3's own skeleton. Concrete, load-bearing findings:
+
+**Push vs. Polling — decisively Polling, not WebSockets.** The lecture frames Push as
+expensive/stateful (open connections per client) and Polling as keeping the server passive
+and simple. This directly matches this project's own already-established principle (engine
+stays passive, pull-based — CLAUDE.md §2, carried from Ex1). Resolves ex3-plan's own open
+question 3 (no longer "our choice" in the abstract) — but the choice is per-endpoint, not
+one global answer:
+- **Full-information polling** (resend the whole list every time) — simple both sides,
+  guarantees sync, costs bandwidth. The example's UserListServlet uses this.
+- **Delta polling** (client sends the last version/index it saw; server returns only what's
+  new since then) — cheaper on the wire, more code on both sides (server computes the
+  delta, client tracks a version and appends). The example's GetChatServlet uses this,
+  keyed by a `version` parameter.
+- **For Guess Market:** the events list and users list (mutable state, not an append-only
+  feed) look like natural fits for full-information polling, matching UserListServlet's own
+  shape. A user's transaction ledger (strictly append-only, like chat messages) is the
+  closer analogue to GetChatServlet's delta pattern — worth designing that way specifically,
+  not applying one strategy uniformly everywhere.
+
+**Identity travels via HTTP Session, not a request parameter.** LoginServlet calls
+`request.getSession(true)` and stores the username there; SendChatServlet reads the acting
+user FROM THE SESSION, not from anything the client sent in that specific request. This is a
+real design correction for Stage 2: our engine-level methods will still take an explicit
+username parameter (that's fine, it's the engine's own contract), but the SERVLET layer
+should resolve "who is calling" from the session once at login, not require the client to
+resend its own username on every single request body.
+
+**Gson gotchas to design around, not discover mid-Stage-2:**
+- Cyclic references between Java objects cause `StackOverflowError` on serialization. This
+  project's DTOs are already flat with no back-references (the Ex1-era "DTO in/out only"
+  rule) — confirms the existing IEngine/dto design is already Gson-safe, not something to
+  rework.
+- Generic collections (`List<Foo>`) lose their type at runtime (type erasure) — deserializing
+  them needs Gson's `TypeToken` (`new TypeToken<List<Foo>>(){}.getType()`), a plain
+  `fromJson(json, List.class)` will not reconstruct it correctly. Concrete implementation
+  note for whichever Stage 2/3 code deserializes any List<...>Dto.
+
+**URL/redirect pitfalls (Stage 2, servlets):**
+- `sendRedirect` with a relative path is resolved against the current URI (drops the last
+  path segment); an absolute path (starting with `/`) goes against the domain root and
+  does NOT include the app's own context path — must prepend `request.getContextPath()`
+  manually, or a same-app redirect 404s.
+- `RequestDispatcher` (server-internal forwarding between servlets) requires a path starting
+  with `/` always — a relative path throws.
+
+**Client-side polling mechanism:** `TimerTask`/`Timer` for the periodic poll;
+`Platform.runLater()` for every UI update after an HTTP response returns off the FX thread —
+already this project's own established rule (CLAUDE.md §2), not new.
+
+**HttpClient vs. OkHttp — reversed, defaulting to the built-in `java.net.http.HttpClient`.**
+Corrected 2026-09-09: the OkHttp jars weren't provided as an Ex3 requirement or
+recommendation — they turned out to be incidental to one downloaded lecture example project
+("12. http-client"), not something the spec or the lecturer told students to use. That
+removes the concrete reason to add a third-party HTTP library at all. This project's own
+standing principle since Ex1 (zero third-party dependencies by default, only deviate with a
+confirmed concrete reason -- CLAUDE.md §1) reasserts itself: `gson.jar` has one (the written
+spec names it by name); OkHttp does not. **Default: `java.net.http.HttpClient`** (built into
+the JDK, already supports async via `sendAsync()` returning a `CompletableFuture`, needs
+nothing downloaded/committed/version-tracked). Revisit only if something concrete emerges
+that specifically requires OkHttp.
+
+## 5. Open questions still worth resolving
 
 1. **Does the negative-balance block still make sense** now that users can deposit funds?
-   The Ex2 rule (blocked forever once negative) may be intended to become "blocked until you
-   top up." The spec doesn't say. Worth a forum question early, since it affects engine logic.
-2. **Ledger granularity** — "every action gets its own line" — does that include commission
-   *received* as MM, subsidy paid at open, payouts at close? (Almost certainly yes, but
-   confirm before designing the ledger's shape.)
-3. **Polling strategy** — all-fetch vs delta is explicitly our choice; decide it deliberately
-   and record the reasoning, since it's exactly the kind of thing a README should explain.
+   Already answered mechanically at the engine level (Stage 1: depositing is exempt from the
+   blocked check, so topping up to 0 auto-unblocks) — no longer open.
+2. **Ledger granularity** — resolved in Stage 1: every debit/credit call site is ledgered by
+   construction (11 sites enumerated and covered).
+3. **HttpClient vs. OkHttp** — see above, the one real remaining unknown.

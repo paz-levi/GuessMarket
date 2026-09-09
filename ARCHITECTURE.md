@@ -93,6 +93,7 @@ flowchart TD
             CreateEventRequestDto["CreateEventRequestDto"]
             TransactionRecordDto["TransactionRecordDto"]
             TransactionType["TransactionType"]
+            LedgerDeltaDtoNode["LedgerDeltaDto"]
         end
 
         subgraph EXC["exception"]
@@ -109,6 +110,27 @@ flowchart TD
             UserAlreadyExistsException["UserAlreadyExistsException"]
             InvalidDepositException["InvalidDepositException"]
         end
+    end
+
+    subgraph SERVER["server module (Ex3 Stage 2 -- WAR-only, Tomcat-hosted)"]
+        subgraph SERVLETS["server.servlets (one per IEngine capability)"]
+            LoginServlet["LoginServlet"]
+            LogoutServlet["LogoutServlet"]
+            UsersListServlet["UsersListServlet"]
+            UserDetailServlet["UserDetailServlet"]
+            LedgerServlet["LedgerServlet"]
+            DepositServlet["DepositServlet"]
+            UploadEventsFileServlet["UploadEventsFileServlet"]
+            EventsListServlet["EventsListServlet"]
+            EventStatusServlet["EventStatusServlet"]
+            OpenEventServlet["OpenEventServlet"]
+            ParticipateServlet["ParticipateServlet"]
+            SubmitOrderServlet["SubmitOrderServlet"]
+            CloseEventServlet["CloseEventServlet"]
+        end
+        ServletUtils["ServletUtils (engine singleton, Gson, error mapping, param parsing)"]
+        SessionUtils["SessionUtils (session identity)"]
+        ServletConstants["ServletConstants"]
     end
 
     Main -->|"createDefault() / calls"| IEngine
@@ -167,6 +189,25 @@ flowchart TD
     GUITABS --> GUICOMMON
     GUICOMMON -->|"formats"| DTO
     Dialogs -->|"unwraps"| GuessMarketException
+    SERVLETS -->|"getEngine(ServletContext) -- one shared instance"| ServletUtils
+    ServletUtils -->|"createDefault()"| IEngine
+    SERVLETS -->|"requireLoggedInUsername()/login()/logout()"| SessionUtils
+    SERVLETS -->|"requireParam/requireIntParam/requireDoubleParam/optionalEnumParam"| ServletUtils
+    SERVLETS -->|"reads names from"| ServletConstants
+    SessionUtils -->|"reads/writes"| ServletConstants
+    LoginServlet -->|"registerUser()"| IEngine
+    UsersListServlet -->|"listUsers()"| IEngine
+    UserDetailServlet -->|"getUser()"| IEngine
+    LedgerServlet -->|"getUser().transactions() -- slices/reverses into"| LedgerDeltaDtoNode
+    DepositServlet -->|"depositFunds()"| IEngine
+    UploadEventsFileServlet -->|"loadEventsFile(InputStream, ...) -- never touches disk"| IEngine
+    EventsListServlet -->|"listEvents(EventFilterDto)"| IEngine
+    EventStatusServlet -->|"getEventStatus()"| IEngine
+    OpenEventServlet -->|"openEvent()"| IEngine
+    ParticipateServlet -->|"participateInEvent()"| IEngine
+    SubmitOrderServlet -->|"submitOrder()"| IEngine
+    CloseEventServlet -->|"closeEvent()"| IEngine
+    ServletUtils -->|"maps GuessMarketException subtype to HTTP status, writes JSON"| EXC
 ```
 
 ---
@@ -234,6 +275,13 @@ flowchart TD
   `exercise2-requirements.md`'s "only the assigned MM can open or close it." Both `ui.Main`'s
   only call site and `gui`'s new Close control (below) go through the authorized version;
   nothing bypasses it.
+  **Ex3 Stage 2 (server module):** gains one new overload,
+  `loadEventsFile(InputStream inputStream, String uploaderUsername)`, sitting alongside the
+  original `String filePath` overload rather than replacing it — the servlet layer's multipart
+  upload servlet must never write the uploaded file to disk (a hard spec rule), and
+  `EventsFileLoader` already had `DocumentBuilder.parse(InputStream)` available as a natural
+  stream-based counterpart to `parse(File)`. No other `IEngine` signature changed this stage.
+  See the "Exercise 3 — Stage 2" section near the end of this file for the full server module.
 
 ### `engine.impl` package
 
@@ -2307,3 +2355,340 @@ later. `engine` depends on neither, so `engine`'s own tests build and run on the
   with no `GM-users` element at all) becomes loadable again *because* of the reverted validation,
   which is exactly why the accumulation test uses it.
 - `SaveLoadStateTest` additionally asserts a user's ledger survives the save/load round-trip.
+
+---
+
+## Exercise 3 — Stage 2: server module (servlets + WAR)
+
+**Why this stage exists, and what it adds.** Stage 1 made the engine's own data model Ex3-shaped
+(name-keyed events, accumulating loads, runtime users) with zero HTTP anywhere. This stage puts
+that engine behind Tomcat: a new `server` module producing exactly one WAR
+(`dist/GuessMarket.war`, deployed as `/GuessMarket`), one servlet per `IEngine` capability,
+session-based caller identity, and a concurrency fix the plan flagged as unavoidable the moment
+a servlet exists — `EngineImpl`'s two maps and everything hanging off them were plain,
+unsynchronized mutable state, and Tomcat serves concurrent requests on separate threads.
+
+**Deliberately not in this stage:** `gui`/`ui` (untouched — confirmed via `git status`, still
+fail to compile exactly as Stage 1 left them, 8 errors in `ui`), the Ex3 client module, and the
+client-side `Task`/async conversion. Out of scope by the plan, not by discovery.
+
+### Concurrency — `EngineImpl`'s `ReentrantReadWriteLock`
+
+One coarse `java.util.concurrent.locks.ReentrantReadWriteLock` field on `EngineImpl`, read-locking
+the six pure readers (`listEvents()` both overloads, `getEventStatus`, `listUsers`, `getUser`,
+`saveState`) and write-locking the nine mutators (`loadEventsFile` both overloads, `registerUser`,
+`depositFunds`, `openEvent`, `participateInEvent`, `submitOrder`, `closeEvent`, `createEvent`,
+`loadState`). Rejected alternatives and why, per CLAUDE.md §5's "no god-methods, deliberate
+concurrency choices" bar:
+
+- **A concurrent collection (`ConcurrentHashMap`) is insufficient and wrong here.** The real races
+  are check-then-act sequences (`registerUser`'s `containsKey`→`put`, `loadEventsFile`'s
+  deliberately-atomic two-pass name check) and mutation of map *values*, not map structure
+  (`User.balance += amount`, a ledger `ArrayList` append whose `sequence` is `size()+1`,
+  `OptionBook`'s bid/ask lists). A concurrent map fixes none of that, and would silently drop
+  `LinkedHashMap`'s insertion order, which is directly user-visible as list ordering.
+- **Fine-grained per-entity locking was rejected as unjustified complexity at this scale.** One
+  order fill already mutates two `User`s, one `Event`, and one `OptionBook` at once;
+  `closeEvent` fans out over every user in the system. A correct lock-ordering scheme across
+  both maps is real deadlock surface for a system serving a handful of clients polling every
+  0.5–2s — no measurable benefit for the risk.
+- **Read/write over a single `synchronized`:** polling makes reads the dominant traffic by a wide
+  margin once several clients hit `/events` and `/users` on a timer, and a `ReadWriteLock` costs
+  one extra field and a `try/finally` for that concurrency.
+
+**Deadlock-safety proof, not just asserted.** A `ReentrantReadWriteLock`'s one real deadlock risk
+is a thread holding only the read lock trying to upgrade to the write lock (the write lock is
+itself safely reentrant, and downgrading — write held, then acquiring read — is fine). That risk
+requires one public method to call another public method of the same instance while a lock is
+already held. A full read of `EngineImpl.java` (all 15 `@Override public` methods, verified by
+grepping every method signature and reading every body) confirms this never happens — every
+public method's helper calls resolve to one of exactly three categories, none of which re-enters
+`EngineImpl`'s own public surface:
+
+| Public method | Helper calls (all private/static on `EngineImpl`, or external) |
+|---|---|
+| `loadEventsFile(String, String)` | `requireRegisteredUploader` (private) → `EventsFileLoader.load` (external static) → `addLoadedEvents` (private) |
+| `loadEventsFile(InputStream, String)` | same shape, `EventsFileLoader.load(InputStream,...)` |
+| `listEvents()` | `toSummaryDto` (private static) |
+| `listEvents(EventFilterDto)` | `matchesFilter`, `toSummaryDto` (both private static) |
+| `getEventStatus` | `findEvent`, `toStatusDto` (both private) |
+| `participateInEvent` | `findActiveEvent` (private) → `TradeExecutor.participate` (external static) → `toTradeConfirmationDto` (private static) |
+| `closeEvent` | `findEvent` (private) → `TradeExecutor.close` / `OrderBookExecutor.close` (external static) → `toStatusDto` (private static) |
+| `saveState` | `StateFileManager.save` (external static) |
+| `loadState` | `StateFileManager.load` (external static) — direct map `clear()`/`putAll()` |
+| `listUsers` | `toUserSummaryDto` (private static) |
+| `registerUser` | direct map `containsKey`/`put` only |
+| `depositFunds` | direct map `get`, `User.credit` (domain instance method, external) |
+| `getUser` | `toUserDetailDto` (private static) |
+| `openEvent` | `findEvent` (private), `LmsrMath.initialSubsidy` (external static), domain object mutators (`User.debit`, `MarketMakerAccount.credit`, `Event.open`, `OrderBookMarket.allocateInitialShares`) |
+| `createEvent` | `validateCreateEventRequest` (private static) → domain constructors → `toStatusDto` (private static) |
+| `submitOrder` | `findActiveEvent` (private) → `OrderBookExecutor.submit` (external static) → `toOrderResultDto` (private instance) |
+
+Zero instances of one `@Override public` method calling another. Same evidentiary standard as
+Stage 1's `Event.id` reader inventory (ARCHITECTURE.md's "Event identity" entry) — read and
+enumerated, not inferred.
+
+**New test coverage:** `engine/test/engine/impl/EngineConcurrencyTest.java` (4 tests, added to
+the existing 88 — engine now 92/92 green, confirmed by two separate `test.bat` runs across this
+stage's edits). Each fires `THREAD_COUNT=20` threads at one live `IEngine` instance through a
+`CountDownLatch` start gate for maximum contention:
+- `concurrentRegistrationsOfTheSameNameLetExactlyOneSucceed` — proves the `registerUser`
+  check-then-act race is actually closed (not just theoretically guarded).
+- `concurrentRegistrationsOfDistinctNamesAllSucceed` — proves the lock isn't so coarse it drops
+  unrelated concurrent writes.
+- `concurrentDepositsToOneAccountSumExactlyAndProduceAGapFreeLedger` — proves `User.credit`'s
+  `balance += amount` and its `sequence = ledger.size()+1` append are both race-free under the
+  engine-level lock, even though `User` itself has no synchronization of its own.
+- `concurrentUploadsOfDistinctFilesBothLandCompletely` — proves two different files, uploaded by
+  two different registered users at once, both land completely with no cross-contamination.
+
+### `server` module — new
+
+```
+server/
+  server.iml
+  src/server/
+    ServletConstants.java     -- every request-parameter/session-attribute/multipart-part name
+    BadRequestException.java  -- malformed/missing parameter, mapped to 400
+    NotLoggedInException.java -- no session where one is required, mapped to 401
+    SessionUtils.java         -- session identity: login()/logout()/requireLoggedInUsername()
+    ServletUtils.java         -- engine singleton, shared Gson (+ LocalDateTime adapter), JSON
+                                  writers, typed parameter parsing
+    servlets/                 -- 13 servlets, one per IEngine capability
+  web/WEB-INF/web.xml         -- display-name + session-timeout only; routing is via @WebServlet
+  postman/
+    GuessMarket.postman_collection.json
+    concurrency-check.ps1
+```
+
+#### `ServletConstants` (`server/src/server/ServletConstants.java`)
+- **What it is:** Every request-parameter name (`username`, `amount`, `eventName`,
+  `optionNumber`, `shareQuantity`, `side`, `quantity`, `price`, `winningOptionNumber`,
+  `tradingMethod`, `status`, `commissionMode`, `since`), the session attribute name, the
+  multipart part name (`file`), and the `ServletContext` attribute name the shared engine lives
+  under — collected in one place so a servlet, its Postman request, and (later) the Ex3 client
+  can never drift apart on a typo'd string literal.
+
+#### `BadRequestException` / `NotLoggedInException` (`server/src/server/*.java`)
+- **What they are:** Two small unchecked exceptions, deliberately **not** extending
+  `GuessMarketException` — they represent request-shape problems the engine never even sees
+  (a missing parameter, no session), not an engine-level business-rule violation. Every servlet
+  catches `GuessMarketException`, `BadRequestException`, and (where it calls
+  `requireLoggedInUsername`) `NotLoggedInException` as three sibling catch clauses, each mapped
+  to its own JSON error shape by `ServletUtils`.
+
+#### `SessionUtils` (`server/src/server/SessionUtils.java`)
+- **What it is:** Identity travels via the HTTP session, never a request parameter — the
+  lecture's `LoginServlet`/`SendChatServlet` pattern (`docs-reference/ex3-plan.md` §4).
+  `login(request, username)` invalidates any pre-existing session on that request before
+  calling `request.getSession(true)`, so a fresh login always starts a genuinely fresh session
+  (no leftover state from an earlier identity can bleed through). `requireLoggedInUsername`
+  throws `NotLoggedInException` before the engine is ever called for an unauthenticated write.
+- **What it connects to:** `LoginServlet` is the only writer; every other write-capable servlet
+  (`DepositServlet`, `UploadEventsFileServlet`, `OpenEventServlet`, `ParticipateServlet`,
+  `SubmitOrderServlet`, `CloseEventServlet`) and `LedgerServlet` (a session-scoped read) call
+  `requireLoggedInUsername` to resolve "who is acting" — never trusting a client-supplied
+  username for identity, even though the underlying `IEngine` methods still take an explicit
+  `username` parameter of their own (that parameter is the engine's own authorization contract,
+  unchanged; the servlet's job is only to resolve it correctly from the session first).
+
+#### `ServletUtils` (`server/src/server/ServletUtils.java`)
+- **What it is:** Every piece of plumbing shared by all 13 servlets: the one live `IEngine`
+  instance (lazily created via the existing `IEngine.createDefault()` factory — CLAUDE.md §2's
+  "reuse this exact pattern" rule — and stored on the `ServletContext` so it survives across
+  every request and every servlet class for the life of the deployment), one shared thread-safe
+  `Gson` instance, JSON response writers, and typed request-parameter parsing that fails as
+  `BadRequestException` rather than a raw `NumberFormatException`.
+- **Gson configuration, and why each piece is there:** `.serializeNulls()` so a nullable field
+  (`OrderBookSnapshotDto.midPrice`, `OrderResultDto.averageFillPrice`) is visibly `null` rather
+  than silently absent — matters for a client deciding whether to render "no bid/ask yet". A
+  `LocalDateTime` type adapter (ISO-8601 via `DateTimeFormatter.ISO_LOCAL_DATE_TIME`) is
+  **mandatory, not cosmetic**: `TradeRecordDto` and `TransactionRecordDto` both carry
+  `LocalDateTime`, and Gson's default reflective path throws `InaccessibleObjectException`
+  against `java.time` on JDK 17+ (java.base does not open that package for reflection) —
+  without the adapter, every response carrying a trade or a ledger line would 500.
+- **Error mapping — `writeError(HttpServletResponse, GuessMarketException)`:** a pattern-matching
+  `switch` over the exception's concrete type (Java 25 type-pattern switch, no sealed hierarchy
+  needed) maps each `GuessMarketException` subtype to an HTTP status, then writes
+  `{"error": <simple class name>, "message": <the exception's own message>}` — the client can
+  render the message directly. `writeBadRequest`/`writeNotLoggedIn` are the two non-engine
+  siblings, same JSON shape, for `BadRequestException`/`NotLoggedInException`.
+
+  | Status | Exceptions |
+  |---|---|
+  | 400 | `XmlValidationException`, `IllegalTradeException`, `InvalidDepositException`, `InvalidEventDefinitionException`, `BadRequestException` |
+  | 401 | `NotLoggedInException` (not an engine exception — no session) |
+  | 403 | `UnauthorizedMarketMakerException`, `UserBlockedException` |
+  | 404 | `EventNotFoundException`, `UserNotFoundException` |
+  | 409 | `UserAlreadyExistsException`, `InvalidCommandStateException` |
+  | 500 | `StateFileException` (unreachable in practice — `saveState`/`loadState` are deliberately not exposed, see below), anything unmapped |
+
+- **What it connects to:** Every servlet calls `ServletUtils.getEngine(getServletContext())`
+  once per request, then one of `requireParam`/`requireIntParam`/`requireDoubleParam`/
+  `optionalEnumParam`/`requireEnumParam` for its own parameters, then `writeJson`/`writeError`
+  for the response — no servlet touches `HttpServletResponse` or `Gson` directly.
+
+#### `server.servlets` package — 13 servlets, `@WebServlet`-routed (no `web.xml` mapping)
+
+Base URL `http://localhost:8080/GuessMarket`. Every write-capable servlet resolves its acting
+username from the session (`SessionUtils.requireLoggedInUsername`), never from a request
+parameter — `/login` is the sole exception, since establishing identity is its entire job.
+
+| Servlet | Method + path | `IEngine` call | Notes |
+|---|---|---|---|
+| `LoginServlet` | POST `/login` | `registerUser` + `SessionUtils.login` | Register-and-session-in-one, per the design decision below |
+| `LogoutServlet` | POST `/logout` | — | `SessionUtils.logout`; idempotent, 204 |
+| `UsersListServlet` | GET `/users` | `listUsers()` | Full-information polling |
+| `UserDetailServlet` | GET `/user` | `getUser(username)` | `?username=` optional, defaults to session |
+| `LedgerServlet` | GET `/user/ledger` | `getUser(username).transactions()` | **Delta polling** — see below |
+| `DepositServlet` | POST `/user/deposit` | `depositFunds` | Session-scoped only |
+| `UploadEventsFileServlet` | POST `/events/upload` | `loadEventsFile(InputStream, ...)` | Multipart, never touches disk — see below |
+| `EventsListServlet` | GET `/events` | `listEvents(EventFilterDto)` | Always the filtered overload; a fully-null filter is equivalent to unfiltered |
+| `EventStatusServlet` | GET `/events/status` | `getEventStatus` | Read, no session required |
+| `OpenEventServlet` | POST `/events/open` | `openEvent` | MM-only, enforced by the engine |
+| `ParticipateServlet` | POST `/events/participate` | `participateInEvent` | |
+| `SubmitOrderServlet` | POST `/events/order` | `submitOrder` | Builds `SubmitOrderRequestDto` from 5 parameters |
+| `CloseEventServlet` | POST `/events/close` | `closeEvent` | MM-only, enforced by the engine |
+
+**Deliberately not exposed as endpoints:** `createEvent` (the Ex2 bonus — Ex3 events come only
+from uploaded files, per the spec) and `saveState`/`loadState` (the spec states Ex3 has no
+persistence; a server restart wipes everything, so there is nothing to save or load). Both
+remain real, working `IEngine` methods — only the servlet layer omits them.
+
+**Login design decision.** A single `POST /login` both registers the name and creates the
+session, rather than separate `/register` + `/login` endpoints. Matches the spec's own wording
+("register at a login screen — name only, no password, duplicate name → error + retry") and the
+fact that Ex3 has no persistence: there is no "returning user" concept to distinguish from a
+first-time one, so a name collision on `/login` is always a genuine duplicate, never a real
+re-authentication. A consequence worth recording, confirmed directly against the running server
+while building the Postman collection: within one continuous server uptime, a name can only ever
+be claimed once — there is no way to "log back in" as a username already registered earlier in
+that same uptime (the second `/login` attempt is a 409, same as any other duplicate). A real
+single client only ever logs in once per session anyway, so this is not a practical limitation,
+just a design consequence worth stating plainly.
+
+**No `sendRedirect` and no `RequestDispatcher` anywhere in this module.** Every servlet writes
+JSON straight to the response body, so neither of the lecture's two URL pitfalls
+(`docs-reference/ex3-plan.md` §4 — relative-redirect path-segment loss, and
+`RequestDispatcher`'s always-`/`-prefixed path requirement) can bite here. Recorded because the
+plan flagged both explicitly as things to design around.
+
+**`UploadEventsFileServlet` — the no-disk-write requirement.** `@MultipartConfig(fileSizeThreshold
+= 20MB, maxFileSize = 20MB, maxRequestSize = 25MB)` — setting the in-memory threshold *at or
+above* the maximum accepted file size means Tomcat's multipart parser never spills the part to
+its own temp directory (no `location` is configured at all). `part.getInputStream()` is read
+directly into `EngineImpl.loadEventsFile(InputStream, uploader)`; nothing under this servlet
+ever calls a `java.io.File` constructor. Verified empirically, not just by configuration
+inspection: after every Postman/concurrency-check upload in this stage's verification pass,
+`Tomcat/work/Catalina/localhost/GuessMarket/` and `Tomcat/temp/` were checked and contain no
+upload-related artifacts (only Tomcat's own unrelated `safeToDelete.tmp` housekeeping file).
+The `.xml`-extension rule, meaningless for a stream (there is no filesystem path to check),
+is re-implemented at the servlet boundary against `Part.getSubmittedFileName()` instead,
+throwing the same `XmlValidationException` `EventsFileLoader`'s own path-based check would.
+
+**`LedgerServlet` — delta polling.** The lecture's `GetChatServlet` pattern
+(`docs-reference/ex3-plan.md` §4): the client sends the highest `sequence` it has already seen
+(`?since=`, defaulting to 0 for a first-ever poll), and the response is only entries with
+`sequence > since`. **`LedgerDeltaDto.entries` is explicitly ordered ASCENDING by sequence
+(oldest of the new batch first)** — the opposite of `UserDetailDto.transactions()`'s own
+newest-first convention — specifically so a client can append the returned list directly onto
+what it already holds, with no client-side re-sort, and advance its own cursor to
+`LedgerDeltaDto.version` (the highest sequence in the batch, or the unchanged `since` value when
+nothing new arrived). Chosen over `UsersListServlet`/`EventsListServlet`'s full-information
+polling because a ledger is strictly append-only (like chat messages), the pattern the lecture's
+own `GetChatServlet` targets; the users and events lists are mutable state, not append-only,
+which is why they use full-information polling instead — a per-endpoint choice, not one
+strategy applied uniformly, exactly as the plan itself called for.
+
+#### `dto.LedgerDeltaDto` (`engine/src/dto/LedgerDeltaDto.java`) — new, in `engine`, not `server`
+- **What it is:** `record LedgerDeltaDto(int version, List<TransactionRecordDto> entries)` — the
+  delta-polling envelope `LedgerServlet` returns.
+- **Why it lives in `engine`'s `dto` package rather than `server`:** Stage 3's client module will
+  also need to deserialize this shape, and `engine.jar` (specifically `dto`) is the only code
+  both the server and the future client module share — `dto` is already the project's shared
+  wire vocabulary. It is the one `dto` type no `IEngine` method returns directly; `LedgerServlet`
+  builds it itself from `UserDetailDto.transactions()` by filtering and reversing. A deliberate,
+  recorded exception to the "every dto type has an IEngine method" pattern, not an oversight.
+
+### Build — `build-server.bat`
+
+Self-contained (doesn't touch `build.bat`, which still fails on `ui`/`gui` as expected): compiles
+`engine` → `dist/engine.jar`, compiles `server` against `servlet-api.jar` (Tomcat-provided,
+compile-only — **never bundled into the WAR**, or it shadows the container's own copy and breaks
+deployment) + `engine` + `gson-2.11.0.jar`, assembles `WEB-INF/classes` (server's own compiled
+classes only) + `WEB-INF/lib` (`engine.jar` + `gson-2.11.0.jar`), packages
+`dist/GuessMarket.war`, and copies it into `%CATALINA_HOME%\webapps\` (falling back to this
+machine's known Tomcat install path if `CATALINA_HOME` isn't set).
+
+**A real Git Bash/MSYS quirk hit and worked around while building this script, recorded since it
+would otherwise look like unnecessary ordering superstition:** a `;`-joined multi-entry `-cp`
+argument to `javac` is silently mangled by Git Bash's automatic path-list conversion *unless its
+first entry is an absolute Windows path* — confirmed by bisection (an absolute-path-first
+two-entry classpath compiles cleanly; the identical entries in the other order fail with
+`package jakarta.servlet.http does not exist`, even though the jar unquestionably exists and
+resolves fine standalone). `build-server.bat` itself runs under `cmd.exe`, which has no such
+issue — the ordering was verified and kept anyway for consistency with how this was diagnosed,
+and because it costs nothing.
+
+**`gson-2.11.0.jar`** — downloaded from Maven Central and committed to `lib/`, following the
+existing `lib/junit-platform-console-standalone-*.jar` and `javafx-sdk/` precedent: a dependency
+that ships in the final artifact must exist in a fresh checkout, not merely on this machine.
+Gson 2.10 is where native `java.lang.Record` deserialization support landed (below it, a record
+throws on its own final fields) — 2.11.0 is simply a safe pick above that floor, not a uniquely
+mandated version.
+
+### Verification performed
+
+- **WAR build + deploy:** `build-server.bat` run clean; `dist/GuessMarket.war` contains
+  `WEB-INF/classes/server/**`, `WEB-INF/lib/{engine.jar,gson-2.11.0.jar}`, and **no**
+  `servlet-api.jar` (confirmed via `jar tf`). Deployed to a fresh Tomcat 11.0.25 start
+  (`catalina.bat run`) with **zero `SEVERE` lines** in `catalina.<date>.log` for that startup
+  (confirmed by isolating log lines at/after the exact startup timestamp — the log file also
+  contains `SEVERE` entries from an earlier, since-fixed `web.xml` bug in an *older* startup,
+  correctly excluded from this count). One real bug caught and fixed here: the first `web.xml`
+  draft's comments used a literal `--` mid-comment (this project's own comment-dash convention),
+  which is illegal inside an XML comment per the XML spec and broke `WebXmlParser` outright —
+  fixed by rewording, not by disabling the check.
+- **Postman collection** (`server/postman/GuessMarket.postman_collection.json`, 29 requests, run
+  via `npx newman run`): all 13 servlets exercised, including every documented error mapping
+  (duplicate login → 409, unauthenticated write → 401, negative deposit → 400, unknown event
+  → 404, non-MM open → 403, unknown user → 404, missing parameter → 400, non-`.xml` upload →
+  400). **52/52 assertions passed** on a clean (freshly-restarted) server. One real ordering bug
+  in the collection itself was caught and fixed during this: Postman/newman maintains one shared
+  cookie jar for the whole run, so logging in a second actor (Bob) silently supersedes the first
+  actor's (Alice's) session — by design, `SessionUtils.login` invalidates the prior session on
+  each fresh login. The collection was restructured so each actor completes their entire block
+  (including any action needing their own identity, like Alice closing her own event) before the
+  next actor logs in, rather than needing to "return" to a superseded identity — which matches
+  how one real client session behaves, and is what the design decision above already implies is
+  the only supported pattern.
+- **Concurrency, over real HTTP** (`server/postman/concurrency-check.ps1`, a `RunspacePool` firing
+  genuinely parallel requests, not sequential loops): all 4 scenarios passed against a freshly
+  restarted server — 20 concurrent same-name registrations → exactly one 200 and nineteen 409s;
+  20 concurrent distinct-name registrations → all 20 land, 20 distinct rows in `GET /users`; 20
+  concurrent deposits of 10.0 to one account → balance exactly 200.0 and a gap-free ledger
+  `sequence` 1..20; 2 concurrent uploads of two different files by two different registered
+  uploaders → both events present exactly once, neither lost nor duplicated. This is the check
+  Stage 1's own single-threaded engine tests structurally could never have performed — it proves
+  the lock holds up under real concurrent Tomcat request threads, not merely concurrent
+  JVM-internal ones. Three real Windows PowerShell 5.1 quirks were hit and fixed while writing
+  this script (documented inline in the script itself, not just here): `Invoke-WebRequest`
+  needs `-UseBasicParsing` in a non-interactive session or it tries to engage IE's rendering
+  engine and fails outright; `-Headers @{ Cookie = ... }` is silently dropped by both
+  `Invoke-WebRequest` and `HttpClient.DefaultRequestHeaders` on .NET Framework (Cookie is a
+  restricted header) — `-WebSession`/a `System.Net.CookieContainer` is the real mechanism; and
+  `Where-Object` returning exactly one match yields a bare object rather than a 1-element array,
+  so `.Count` reads `$null` unless explicitly wrapped in `@(...)`.
+- **`engine` regression:** `test.bat` run twice across this stage's edits (once immediately after
+  the lock + `InputStream` overload, once at the very end) — **92/92 green both times** (the
+  original 88 plus the 4 new `EngineConcurrencyTest` cases), zero tests modified or deleted.
+- **Scope check:** `git status --short gui/ ui/` returns nothing — neither module was touched.
+  `ui` still fails to compile with the same shape of error Stage 1 left it in
+  (`EventStatusDto.eventId()` no longer exists), confirming this stage changed nothing about
+  their already-known-broken state.
+
+**Not independently verified — needs the user's own check:** actually browsing to
+`http://localhost:8080/GuessMarket/...` in a real browser (only `curl`/Postman/PowerShell were
+used here), and IntelliJ picking up the new `server` module without a manual reimport (`.idea/`
+is gitignored, so `server.iml` is committed but its `modules.xml` registration is local-only —
+the same situation every earlier module split in this project has left for the next IDE open).

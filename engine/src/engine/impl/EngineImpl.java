@@ -1,5 +1,6 @@
 package engine.impl;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -7,6 +8,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import dto.CreateEventRequestDto;
 import dto.EventFilterDto;
@@ -73,6 +76,22 @@ public class EngineImpl implements IEngine {
     private final Map<String, Event> events = new LinkedHashMap<>();
     private final Map<String, User> users = new LinkedHashMap<>();
 
+    // Ex3 Stage 2: Tomcat serves each request on its own thread, and both maps above (plus the domain objects
+    // hanging off their values -- User balances/ledgers, Event trade histories, OptionBook order lists) are plain
+    // mutable state with no thread-safety of their own. One coarse read/write lock at this exact boundary is
+    // sufficient and correct: every mutation path in the whole engine starts at one of this class's own public
+    // methods (see the per-method lock section below), nothing outside EngineImpl ever reaches events/users
+    // directly, and every DTO returned to a caller is built from an immutable record while still inside the lock.
+    // Read/write (over a single mutex) matters because polling makes reads the dominant traffic by a wide margin
+    // once several clients are hitting /events and /users every 0.5-2s. Fine-grained per-entity locking was
+    // rejected: one order fill already touches two Users, one Event, and one OptionBook at once, and closeEvent
+    // fans out over every User in the system, so a correct lock-ordering scheme across both maps would be real
+    // deadlock surface for no measurable benefit at this scale. See ARCHITECTURE.md's Ex3 Stage 2 entry for the
+    // proof that no public method here ever calls another public method of this class (the one way a
+    // ReentrantReadWriteLock actually can deadlock -- a thread holding only the read lock trying to upgrade to the
+    // write lock) -- verified against a grep, not asserted.
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+
     // Loads and validates the file fully before touching any live state, then ADDS its events to whatever is
     // already loaded -- Ex3 files accumulate rather than replace, so every upload enriches the system. The uploader
     // becomes the market maker of every event in their own file. A file carrying a name the system already holds is
@@ -80,11 +99,44 @@ public class EngineImpl implements IEngine {
     @Override
     public void loadEventsFile(String filePath, String uploaderUsername)
             throws XmlValidationException, UserNotFoundException {
+        lock.writeLock().lock();
+        try {
+            requireRegisteredUploader(uploaderUsername);
+            List<Event> loadedEvents = EventsFileLoader.load(filePath, uploaderUsername);
+            addLoadedEvents(loadedEvents);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    // Server-side counterpart of the path-based overload above, taking a multipart upload's InputStream directly so
+    // the caller never has to write the uploaded file to disk. Same accumulation/uniqueness/authorization rules.
+    @Override
+    public void loadEventsFile(InputStream inputStream, String uploaderUsername)
+            throws XmlValidationException, UserNotFoundException {
+        lock.writeLock().lock();
+        try {
+            requireRegisteredUploader(uploaderUsername);
+            List<Event> loadedEvents = EventsFileLoader.load(inputStream, uploaderUsername);
+            addLoadedEvents(loadedEvents);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    // Shared guard both loadEventsFile overloads need before parsing: the uploader must already be a registered
+    // user, since they become MM of every event the file contains.
+    private void requireRegisteredUploader(String uploaderUsername) throws UserNotFoundException {
         if (!users.containsKey(uploaderUsername)) {
             throw new UserNotFoundException("No user named \"" + uploaderUsername
                     + "\" is registered; only a registered user can upload an events file.");
         }
-        List<Event> loadedEvents = EventsFileLoader.load(filePath, uploaderUsername);
+    }
+
+    // Shared tail both loadEventsFile overloads need once EventsFileLoader has returned a validated event list:
+    // the two-pass check-then-put is what keeps a file all-or-nothing -- a single duplicate name rejects the whole
+    // file, none of it partially lands.
+    private void addLoadedEvents(List<Event> loadedEvents) throws XmlValidationException {
         for (Event event : loadedEvents) {
             if (events.containsKey(event.getName())) {
                 throw new XmlValidationException("An event named \"" + event.getName()
@@ -100,9 +152,14 @@ public class EngineImpl implements IEngine {
     // an error: a freshly started system simply holds no events until somebody uploads a file.
     @Override
     public List<EventSummaryDto> listEvents() {
-        return events.values().stream()
-                .map(EngineImpl::toSummaryDto)
-                .toList();
+        lock.readLock().lock();
+        try {
+            return events.values().stream()
+                    .map(EngineImpl::toSummaryDto)
+                    .toList();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     // Maps a domain Event to the DTO shape ui is allowed to see.
@@ -123,32 +180,42 @@ public class EngineImpl implements IEngine {
     // Returns the full trading-status view for one event, active or closed.
     @Override
     public EventStatusDto getEventStatus(String eventName) throws EventNotFoundException {
-        return toStatusDto(findEvent(eventName));
+        lock.readLock().lock();
+        try {
+            return toStatusDto(findEvent(eventName));
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     // Buys shareQuantity shares of one option on username's behalf, then returns a confirmation carrying the trade's cost breakdown and the event's new status.
     @Override
     public TradeConfirmationDto participateInEvent(String eventName, String username, int optionNumber, int shareQuantity)
             throws EventNotFoundException, IllegalTradeException, UserNotFoundException, UserBlockedException {
-        Event event = findActiveEvent(eventName);
-        // Without this, TradeExecutor's LMSR overflow guard catches Order Book events only by accident: their
-        // liquidityParameter is 0, so its `shares / b` check divides by zero, yields Infinity, and always trips --
-        // reporting "purchase quantity too large, try a smaller quantity", which misdiagnoses the problem and gives
-        // advice that can never work. Same defensive-guard pattern as closeEvent's and submitOrder's.
-        if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
-            throw new IllegalTradeException("Event \"" + eventName
-                    + "\" is an Order Book event; LMSR participation is not valid for it. Use submitOrder instead.");
+        lock.writeLock().lock();
+        try {
+            Event event = findActiveEvent(eventName);
+            // Without this, TradeExecutor's LMSR overflow guard catches Order Book events only by accident: their
+            // liquidityParameter is 0, so its `shares / b` check divides by zero, yields Infinity, and always trips --
+            // reporting "purchase quantity too large, try a smaller quantity", which misdiagnoses the problem and gives
+            // advice that can never work. Same defensive-guard pattern as closeEvent's and submitOrder's.
+            if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
+                throw new IllegalTradeException("Event \"" + eventName
+                        + "\" is an Order Book event; LMSR participation is not valid for it. Use submitOrder instead.");
+            }
+            User buyer = users.get(username);
+            if (buyer == null) {
+                throw new UserNotFoundException("No user named \"" + username + "\" is currently loaded.");
+            }
+            if (buyer.isBlocked()) {
+                throw new UserBlockedException("User \"" + username
+                        + "\" is blocked (balance below zero) and cannot perform this action.");
+            }
+            Trade trade = TradeExecutor.participate(event, buyer, optionNumber, shareQuantity);
+            return toTradeConfirmationDto(event, trade);
+        } finally {
+            lock.writeLock().unlock();
         }
-        User buyer = users.get(username);
-        if (buyer == null) {
-            throw new UserNotFoundException("No user named \"" + username + "\" is currently loaded.");
-        }
-        if (buyer.isBlocked()) {
-            throw new UserBlockedException("User \"" + username
-                    + "\" is blocked (balance below zero) and cannot perform this action.");
-        }
-        Trade trade = TradeExecutor.participate(event, buyer, optionNumber, shareQuantity);
-        return toTradeConfirmationDto(event, trade);
     }
 
     // Declares the winning option, settles payouts and commission, marks the event CLOSED, and returns its final status.
@@ -157,43 +224,58 @@ public class EngineImpl implements IEngine {
     @Override
     public EventStatusDto closeEvent(String eventName, String username, int winningOptionNumber)
             throws EventNotFoundException, IllegalTradeException, UnauthorizedMarketMakerException {
-        Event event = findEvent(eventName);
-        if (!username.equals(event.getMarketMakerUsername())) {
-            throw new UnauthorizedMarketMakerException("User \"" + username
-                    + "\" is not the market maker for event \"" + eventName + "\".");
+        lock.writeLock().lock();
+        try {
+            Event event = findEvent(eventName);
+            if (!username.equals(event.getMarketMakerUsername())) {
+                throw new UnauthorizedMarketMakerException("User \"" + username
+                        + "\" is not the market maker for event \"" + eventName + "\".");
+            }
+            if (event.getStatus() != EventStatus.ACTIVE) {
+                throw new IllegalTradeException("Event \"" + eventName + "\" is not currently ACTIVE (status: "
+                        + event.getStatus() + ") and cannot be closed.");
+            }
+            // TradeExecutor.close() is pure LMSR settlement math (it pays the winning option's outstanding shares out of
+            // the MM account); it would silently produce nonsense on an Order Book event, which settles from
+            // OptionBook.holdings instead via its own OrderBookExecutor.close() -- see CLAUDE.md Section 8 item 4.
+            if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
+                OrderBookExecutor.close(event, winningOptionNumber, users);
+            } else {
+                TradeExecutor.close(event, winningOptionNumber, users);
+            }
+            return toStatusDto(event);
+        } finally {
+            lock.writeLock().unlock();
         }
-        if (event.getStatus() != EventStatus.ACTIVE) {
-            throw new IllegalTradeException("Event \"" + eventName + "\" is not currently ACTIVE (status: "
-                    + event.getStatus() + ") and cannot be closed.");
-        }
-        // TradeExecutor.close() is pure LMSR settlement math (it pays the winning option's outstanding shares out of
-        // the MM account); it would silently produce nonsense on an Order Book event, which settles from
-        // OptionBook.holdings instead via its own OrderBookExecutor.close() -- see CLAUDE.md Section 8 item 4.
-        if (event.getTradingMethod() == TradingMethod.ORDER_BOOK) {
-            OrderBookExecutor.close(event, winningOptionNumber, users);
-        } else {
-            TradeExecutor.close(event, winningOptionNumber, users);
-        }
-        return toStatusDto(event);
     }
 
     // Serializes every currently loaded event and user (all trade history, account balances) to a save-state file.
     @Override
     public void saveState(String filePath) throws InvalidCommandStateException, StateFileException {
-        if (events.isEmpty()) {
-            throw new InvalidCommandStateException(NOTHING_TO_SAVE_MESSAGE);
+        lock.readLock().lock();
+        try {
+            if (events.isEmpty()) {
+                throw new InvalidCommandStateException(NOTHING_TO_SAVE_MESSAGE);
+            }
+            StateFileManager.save(events, users, filePath);
+        } finally {
+            lock.readLock().unlock();
         }
-        StateFileManager.save(events, users, filePath);
     }
 
     // Deserializes a previously saved state file fully before touching any live state, then atomically replaces it (both events and users) on success.
     @Override
     public void loadState(String filePath) throws StateFileException {
-        LoadedState loaded = StateFileManager.load(filePath);
-        events.clear();
-        events.putAll(loaded.events());
-        users.clear();
-        users.putAll(loaded.users());
+        lock.writeLock().lock();
+        try {
+            LoadedState loaded = StateFileManager.load(filePath);
+            events.clear();
+            events.putAll(loaded.events());
+            users.clear();
+            users.putAll(loaded.users());
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     // Looks up an event by name. An unknown name is simply not found, whether the system holds no events at all or
@@ -337,9 +419,14 @@ public class EngineImpl implements IEngine {
     // for a freshly started system rather than an error.
     @Override
     public List<UserSummaryDto> listUsers() {
-        return users.values().stream()
-                .map(EngineImpl::toUserSummaryDto)
-                .toList();
+        lock.readLock().lock();
+        try {
+            return users.values().stream()
+                    .map(EngineImpl::toUserSummaryDto)
+                    .toList();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     // Maps a domain User to the DTO shape ui is allowed to see.
@@ -351,15 +438,20 @@ public class EngineImpl implements IEngine {
     // identity (an event stores its market maker as one), so a name already taken is refused rather than merged.
     @Override
     public void registerUser(String username) throws UserAlreadyExistsException {
-        String name = username == null ? "" : username.trim();
-        if (name.isEmpty()) {
-            throw new UserAlreadyExistsException("A user name must not be blank.");
+        lock.writeLock().lock();
+        try {
+            String name = username == null ? "" : username.trim();
+            if (name.isEmpty()) {
+                throw new UserAlreadyExistsException("A user name must not be blank.");
+            }
+            if (users.containsKey(name)) {
+                throw new UserAlreadyExistsException("The name \"" + name
+                        + "\" is already taken; please choose a different one.");
+            }
+            users.put(name, new User(name, INITIAL_REGISTERED_BALANCE));
+        } finally {
+            lock.writeLock().unlock();
         }
-        if (users.containsKey(name)) {
-            throw new UserAlreadyExistsException("The name \"" + name
-                    + "\" is already taken; please choose a different one.");
-        }
-        users.put(name, new User(name, INITIAL_REGISTERED_BALANCE));
     }
 
     // Adds money to a user's own balance, recording it on their ledger. Deliberately the one action a blocked user
@@ -368,24 +460,34 @@ public class EngineImpl implements IEngine {
     @Override
     public void depositFunds(String username, double amount)
             throws UserNotFoundException, InvalidDepositException {
-        if (amount <= 0) {
-            throw new InvalidDepositException("A deposit must be greater than 0; got " + amount + ".");
+        lock.writeLock().lock();
+        try {
+            if (amount <= 0) {
+                throw new InvalidDepositException("A deposit must be greater than 0; got " + amount + ".");
+            }
+            User user = users.get(username);
+            if (user == null) {
+                throw new UserNotFoundException("No user named \"" + username + "\" is registered.");
+            }
+            user.credit(amount, TransactionType.DEPOSIT, null);
+        } finally {
+            lock.writeLock().unlock();
         }
-        User user = users.get(username);
-        if (user == null) {
-            throw new UserNotFoundException("No user named \"" + username + "\" is registered.");
-        }
-        user.credit(amount, TransactionType.DEPOSIT, null);
     }
 
     // Returns the full detail view for one user, looked up by name.
     @Override
     public UserDetailDto getUser(String username) throws UserNotFoundException {
-        User user = users.get(username);
-        if (user == null) {
-            throw new UserNotFoundException("No user named \"" + username + "\" is registered.");
+        lock.readLock().lock();
+        try {
+            User user = users.get(username);
+            if (user == null) {
+                throw new UserNotFoundException("No user named \"" + username + "\" is registered.");
+            }
+            return toUserDetailDto(user, events.values());
+        } finally {
+            lock.readLock().unlock();
         }
-        return toUserDetailDto(user, events.values());
     }
 
     // Builds the full "user detail" DTO from a domain User: balance, blocked state, and one participation entry per
@@ -494,42 +596,47 @@ public class EngineImpl implements IEngine {
     @Override
     public EventStatusDto openEvent(String eventName, String username)
             throws EventNotFoundException, UnauthorizedMarketMakerException, IllegalTradeException {
-        Event event = findEvent(eventName);
-        if (!username.equals(event.getMarketMakerUsername())) {
-            throw new UnauthorizedMarketMakerException("User \"" + username
-                    + "\" is not the market maker for event \"" + eventName + "\".");
-        }
-        if (event.getStatus() != EventStatus.NOT_STARTED) {
-            throw new IllegalTradeException("Event \"" + eventName + "\" is not currently NOT_STARTED (status: "
-                    + event.getStatus() + ") and cannot be opened.");
-        }
+        lock.writeLock().lock();
+        try {
+            Event event = findEvent(eventName);
+            if (!username.equals(event.getMarketMakerUsername())) {
+                throw new UnauthorizedMarketMakerException("User \"" + username
+                        + "\" is not the market maker for event \"" + eventName + "\".");
+            }
+            if (event.getStatus() != EventStatus.NOT_STARTED) {
+                throw new IllegalTradeException("Event \"" + eventName + "\" is not currently NOT_STARTED (status: "
+                        + event.getStatus() + ") and cannot be opened.");
+            }
 
-        // Guaranteed present: an event's marketMakerUsername is either the registered uploader loadEventsFile checked,
-        // or the registered creator createEvent checked -- there is no third way for an event to acquire one.
-        User marketMaker = users.get(username);
-        // Both methods debit the MM and credit the event account identically; only the amount differs (and Order Book
-        // additionally hands the MM the share stock that payment bought).
-        boolean isOrderBook = event.getTradingMethod() == TradingMethod.ORDER_BOOK;
-        double openingCost = isOrderBook
-                ? event.getOrderBook().getInitial()
-                : LmsrMath.initialSubsidy(event.getLiquidityParameter());
-        if (marketMaker.getBalance() < openingCost) {
-            throw new IllegalTradeException("User \"" + username + "\" cannot afford to open event \"" + eventName
-                    + "\": opening cost " + openingCost + " exceeds balance " + marketMaker.getBalance() + ".");
-        }
+            // Guaranteed present: an event's marketMakerUsername is either the registered uploader loadEventsFile checked,
+            // or the registered creator createEvent checked -- there is no third way for an event to acquire one.
+            User marketMaker = users.get(username);
+            // Both methods debit the MM and credit the event account identically; only the amount differs (and Order Book
+            // additionally hands the MM the share stock that payment bought).
+            boolean isOrderBook = event.getTradingMethod() == TradingMethod.ORDER_BOOK;
+            double openingCost = isOrderBook
+                    ? event.getOrderBook().getInitial()
+                    : LmsrMath.initialSubsidy(event.getLiquidityParameter());
+            if (marketMaker.getBalance() < openingCost) {
+                throw new IllegalTradeException("User \"" + username + "\" cannot afford to open event \"" + eventName
+                        + "\": opening cost " + openingCost + " exceeds balance " + marketMaker.getBalance() + ".");
+            }
 
-        marketMaker.debit(openingCost, TransactionType.EVENT_OPEN_FUNDING, eventName);
-        event.getMarketMakerAccount().credit(openingCost);
-        if (isOrderBook) {
-            // initial/d share-pairs: one share of each option per pair. This is the only place outside a mint where
-            // an Order Book event's share supply grows, so both options' outstanding counts move together.
-            double pairs = openingCost / event.getOrderBook().getD();
-            event.getOrderBook().allocateInitialShares(username, pairs);
-            event.getOptionOne().addShares(pairs);
-            event.getOptionTwo().addShares(pairs);
+            marketMaker.debit(openingCost, TransactionType.EVENT_OPEN_FUNDING, eventName);
+            event.getMarketMakerAccount().credit(openingCost);
+            if (isOrderBook) {
+                // initial/d share-pairs: one share of each option per pair. This is the only place outside a mint where
+                // an Order Book event's share supply grows, so both options' outstanding counts move together.
+                double pairs = openingCost / event.getOrderBook().getD();
+                event.getOrderBook().allocateInitialShares(username, pairs);
+                event.getOptionOne().addShares(pairs);
+                event.getOptionTwo().addShares(pairs);
+            }
+            event.open();
+            return toStatusDto(event);
+        } finally {
+            lock.writeLock().unlock();
         }
-        event.open();
-        return toStatusDto(event);
     }
 
     // Creates a brand-new NOT_STARTED event from the given definition and assigns its MM -- mirrors
@@ -540,44 +647,49 @@ public class EngineImpl implements IEngine {
     @Override
     public EventStatusDto createEvent(CreateEventRequestDto request)
             throws UserNotFoundException, InvalidEventDefinitionException {
-        validateCreateEventRequest(request);
-        User marketMaker = users.get(request.marketMakerUsername());
-        if (marketMaker == null) {
-            throw new UserNotFoundException("No user named \"" + request.marketMakerUsername() + "\" is registered.");
-        }
-        // The same system-wide uniqueness rule loadEventsFile enforces: a name identifies exactly one event,
-        // no matter which of the two ways it entered the system.
-        String name = request.name().trim();
-        if (events.containsKey(name)) {
-            throw new InvalidEventDefinitionException("An event named \"" + name
-                    + "\" already exists; event names must be unique.");
-        }
+        lock.writeLock().lock();
+        try {
+            validateCreateEventRequest(request);
+            User marketMaker = users.get(request.marketMakerUsername());
+            if (marketMaker == null) {
+                throw new UserNotFoundException("No user named \"" + request.marketMakerUsername() + "\" is registered.");
+            }
+            // The same system-wide uniqueness rule loadEventsFile enforces: a name identifies exactly one event,
+            // no matter which of the two ways it entered the system.
+            String name = request.name().trim();
+            if (events.containsKey(name)) {
+                throw new InvalidEventDefinitionException("An event named \"" + name
+                        + "\" already exists; event names must be unique.");
+            }
 
-        EventOption optionOne = new EventOption(request.optionOneName().trim());
-        EventOption optionTwo = new EventOption(request.optionTwoName().trim());
-        // Starts at 0 either way, exactly like EventsFileLoader.buildEvent: the MM's opening payment only moves
-        // from their own balance once openEvent actually opens this event.
-        MarketMakerAccount marketMakerAccount = new MarketMakerAccount(0.0);
-        CommissionMode commissionMode = toDomainCommissionMode(request.commissionMode());
+            EventOption optionOne = new EventOption(request.optionOneName().trim());
+            EventOption optionTwo = new EventOption(request.optionTwoName().trim());
+            // Starts at 0 either way, exactly like EventsFileLoader.buildEvent: the MM's opening payment only moves
+            // from their own balance once openEvent actually opens this event.
+            MarketMakerAccount marketMakerAccount = new MarketMakerAccount(0.0);
+            CommissionMode commissionMode = toDomainCommissionMode(request.commissionMode());
 
-        // This is the exact branch EventsFileLoader.buildEvent (lines 159-168) already runs at load time --
-        // reproduced here field-for-field so a created event and a loaded event are built the same way.
-        Event event;
-        if (request.tradingMethod() == TradingMethod.LMSR) {
-            event = new Event(name, request.description().trim(), optionOne, optionTwo,
-                    request.commissionRate(), commissionMode, request.liquidityParameter(),
-                    marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.LMSR, null);
-        } else {
-            // liquidityParameter is passed as the literal 0 and orderBook is a real OrderBookMarket -- the mirror
-            // image of the LMSR branch above, exactly matching EventsFileLoader.buildEvent's own two return statements.
-            OrderBookMarket orderBook = new OrderBookMarket(request.initial(), request.d(), request.allowMint());
-            event = new Event(name, request.description().trim(), optionOne, optionTwo,
-                    request.commissionRate(), commissionMode, 0,
-                    marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.ORDER_BOOK, orderBook);
+            // This is the exact branch EventsFileLoader.buildEvent (lines 159-168) already runs at load time --
+            // reproduced here field-for-field so a created event and a loaded event are built the same way.
+            Event event;
+            if (request.tradingMethod() == TradingMethod.LMSR) {
+                event = new Event(name, request.description().trim(), optionOne, optionTwo,
+                        request.commissionRate(), commissionMode, request.liquidityParameter(),
+                        marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.LMSR, null);
+            } else {
+                // liquidityParameter is passed as the literal 0 and orderBook is a real OrderBookMarket -- the mirror
+                // image of the LMSR branch above, exactly matching EventsFileLoader.buildEvent's own two return statements.
+                OrderBookMarket orderBook = new OrderBookMarket(request.initial(), request.d(), request.allowMint());
+                event = new Event(name, request.description().trim(), optionOne, optionTwo,
+                        request.commissionRate(), commissionMode, 0,
+                        marketMakerAccount, EventStatus.NOT_STARTED, TradingMethod.ORDER_BOOK, orderBook);
+            }
+            event.assignMarketMaker(request.marketMakerUsername());
+            events.put(name, event);
+            return toStatusDto(event);
+        } finally {
+            lock.writeLock().unlock();
         }
-        event.assignMarketMaker(request.marketMakerUsername());
-        events.put(name, event);
-        return toStatusDto(event);
     }
 
     // Validates a create-event request's own fields, mirroring EventsFileLoader's exact business-rule constants
@@ -627,22 +739,27 @@ public class EngineImpl implements IEngine {
     @Override
     public OrderResultDto submitOrder(SubmitOrderRequestDto request)
             throws EventNotFoundException, IllegalTradeException, UserNotFoundException, UserBlockedException {
-        Event event = findActiveEvent(request.eventName());
-        if (event.getTradingMethod() != TradingMethod.ORDER_BOOK) {
-            throw new IllegalTradeException("Event \"" + request.eventName()
-                    + "\" is an LMSR event; use participateInEvent to trade on it, not submitOrder.");
+        lock.writeLock().lock();
+        try {
+            Event event = findActiveEvent(request.eventName());
+            if (event.getTradingMethod() != TradingMethod.ORDER_BOOK) {
+                throw new IllegalTradeException("Event \"" + request.eventName()
+                        + "\" is an LMSR event; use participateInEvent to trade on it, not submitOrder.");
+            }
+            User trader = users.get(request.username());
+            if (trader == null) {
+                throw new UserNotFoundException("No user named \"" + request.username() + "\" is registered.");
+            }
+            if (trader.isBlocked()) {
+                throw new UserBlockedException("User \"" + request.username()
+                        + "\" is blocked (balance below zero) and cannot perform this action.");
+            }
+            List<Trade> fills = OrderBookExecutor.submit(event, trader, request.optionNumber(), request.side(),
+                    request.quantity(), request.price(), users);
+            return toOrderResultDto(event, request, fills);
+        } finally {
+            lock.writeLock().unlock();
         }
-        User trader = users.get(request.username());
-        if (trader == null) {
-            throw new UserNotFoundException("No user named \"" + request.username() + "\" is registered.");
-        }
-        if (trader.isBlocked()) {
-            throw new UserBlockedException("User \"" + request.username()
-                    + "\" is blocked (balance below zero) and cannot perform this action.");
-        }
-        List<Trade> fills = OrderBookExecutor.submit(event, trader, request.optionNumber(), request.side(),
-                request.quantity(), request.price(), users);
-        return toOrderResultDto(event, request, fills);
     }
 
     // Builds the submitting user's receipt: what filled (possibly at several prices), what still rests, and the
@@ -672,10 +789,15 @@ public class EngineImpl implements IEngine {
     // unfiltered overload, an empty result is an answer rather than an error.
     @Override
     public List<EventSummaryDto> listEvents(EventFilterDto filter) {
-        return events.values().stream()
-                .filter(event -> matchesFilter(event, filter))
-                .map(EngineImpl::toSummaryDto)
-                .toList();
+        lock.readLock().lock();
+        try {
+            return events.values().stream()
+                    .filter(event -> matchesFilter(event, filter))
+                    .map(EngineImpl::toSummaryDto)
+                    .toList();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     // Whether event passes every non-null dimension of filter -- a null field means no restriction on that dimension.

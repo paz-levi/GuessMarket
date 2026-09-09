@@ -1,5 +1,6 @@
 package engine;
 
+import java.io.InputStream;
 import java.util.List;
 
 import dto.CreateEventRequestDto;
@@ -37,6 +38,11 @@ public interface IEngine {
     // uploaderUsername becomes the market maker of every event in the file. Rejects the whole file if any of its
     // event names is already taken, whether within the file itself or by an earlier upload.
     void loadEventsFile(String filePath, String uploaderUsername) throws XmlValidationException, UserNotFoundException;
+
+    // Server-side counterpart of the path-based overload above: reads a multipart upload's InputStream directly
+    // rather than a filesystem path, so the caller never has to write the uploaded file to disk. Same accumulation/
+    // uniqueness/authorization rules apply identically.
+    void loadEventsFile(InputStream inputStream, String uploaderUsername) throws XmlValidationException, UserNotFoundException;
 
     // Returns a summary of every currently loaded event; empty when nothing has been uploaded yet.
     List<EventSummaryDto> listEvents();

@@ -2,6 +2,7 @@ package engine.impl.xml;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -65,6 +66,19 @@ public final class EventsFileLoader {
     public static List<Event> load(String filePath, String uploaderUsername) {
         File file = validateFilePath(filePath);
         Document document = parseDocument(file);
+        return buildEvents(document, uploaderUsername);
+    }
+
+    // Server-side counterpart of load(String, String): reads a multipart upload's InputStream directly, per the
+    // Ex3 spec's hard rule that an uploaded file must never be written to disk. There is no path to validate here --
+    // the .xml-extension check happens at the servlet boundary instead, against Part.getSubmittedFileName().
+    public static List<Event> load(InputStream inputStream, String uploaderUsername) {
+        Document document = parseDocument(inputStream);
+        return buildEvents(document, uploaderUsername);
+    }
+
+    // Shared tail of both load() overloads once a Document exists, regardless of where it came from.
+    private static List<Event> buildEvents(Document document, String uploaderUsername) {
         List<Event> events = extractEvents(document);
         for (Event event : events) {
             event.assignMarketMaker(uploaderUsername);
@@ -90,6 +104,19 @@ public final class EventsFileLoader {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             DocumentBuilder builder = factory.newDocumentBuilder();
             Document document = builder.parse(file);
+            document.getDocumentElement().normalize();
+            return document;
+        } catch (ParserConfigurationException | SAXException | IOException e) {
+            throw new XmlValidationException("The file could not be parsed as XML: " + e.getMessage());
+        }
+    }
+
+    // Same as parseDocument(File), but reads directly from an already-open stream -- the no-disk-write path.
+    private static Document parseDocument(InputStream inputStream) {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document document = builder.parse(inputStream);
             document.getDocumentElement().normalize();
             return document;
         } catch (ParserConfigurationException | SAXException | IOException e) {
