@@ -6,6 +6,156 @@ scannable in seconds.
 
 ---
 
+### `7fdc929` — 2026-09-08 — Pre-Ex3 refactor: split MainViewController into gui.tabs/gui.components/gui.common, promote presentation layer to a public, module-reusable API via TabCoordinator
+**The goal was reachability, not file size.** The Ex3 inventory found the real blocker: `gui`'s
+presentation layer was unreachable from any other module, because everything shared was
+package-private and accessed by direct same-package reach-in (`controller.engine` — a *field* —
+plus `controller.refreshEventsList()`, `controller.buildUsernameComboBox()`,
+`controller.showErrorAlert(...)`, `MainViewController.wrappingLabel/formatMoney/...`). Ex3's spec
+mandates a **new module** for its client app "based on the components you already have from
+Ex2," which that access model made impossible. `MainViewController` at 914 lines was the
+symptom; the access model was the blocker. Now 161 lines (shell only: header bar, load `Task`,
+color scheme, `<fx:include>` wiring), with three new public packages: `gui.common`
+(`Formatters`, `Labels`, `Dialogs`), `gui.components` (`EventStatusPanelBuilder`,
+`EventActionsPanelBuilder`, `PriceHistoryChartBuilder`, `BalanceHistoryChartBuilder`,
+`UsernamePicker`, plus `OrderBookPanelBuilder`/`CreateEventDialogBuilder` moved in and made
+public), and `gui.tabs` (`EventsTabController`, `UsersTabController`, `TabCoordinator`). Every
+builder now takes `IEngine` + `TabCoordinator` as explicit parameters — that parameter change
+*is* the decoupling. Verified by grep: zero remaining reach-ins, and nothing in
+`common`/`components`/`tabs` references `MainViewController` outside one doc comment.
+`EventActionsPanelBuilder` had to become a shared component rather than tab-owned, since both
+tabs already called the old `buildActionControl`.
+
+**`TabCoordinator` is this project's own design decision, explicitly NOT attributable to the
+lecturer's materials.** Those materials teach the `<fx:include>` split and its
+`fx:id`→`XxxController` injection convention but say nothing about inter-controller
+communication — ` docs-reference/lecture-notes-javafx.md` records that exact gap as the reason
+the split was deferred until now. The chosen mechanism is a two-method interface implemented by
+the shell and injected into each tab, so no tab ever references another and the wiring stays a
+tree. Picked over an event bus because it is a behavior-preserving 1:1 extraction of the
+`refreshEventsList(); refreshUsersList();` pairs the code already had at every mutating call
+site; two methods rather than one `refreshAll()` because real call sites genuinely differ (a
+filter change refreshes events only). Async/HTTP conversion of `IEngine` calls was deliberately
+left out of scope — the spec names it as Ex3's own first implementation step, so
+`setEngine(IEngine)` and the synchronous calling convention are untouched.
+
+**Real bug caught by the wiring harness, invisible to the build:** two of the new FXML comments
+used `--` as a dash, which is illegal inside an XML comment. `build.bat` never parses FXML, so
+this compiled and packaged cleanly and would only have surfaced as a `LoadException` at launch.
+The harness hit it on its first run; fixed in both files and recorded in `ARCHITECTURE.md`. Zero
+behavior change, zero engine changes, every event still exactly 2 options. Verification: clean
+rebuild (warning-free), all 77 tests pass (engine-only — they prove the engine is untouched and
+nothing about this refactor), plus a throwaway JavaFX harness that loaded the real FXML and
+asserted both `<fx:include>` controllers injected, engine/coordinator propagated, **every**
+`@FXML` field bound (catches silent `fx:id` mismatches), and all four mutating paths (LMSR buy,
+Order Book submit, open, close) calling both coordinator refreshes exactly once via real button
+clicks against a spy coordinator. `build.bat` needed no change — already recursive.
+
+### `87e1c82` — 2026-09-07 — Fix LMSR: reject a purchase that would cost effectively $0.00 due to floating-point precision at extreme price skew (77/77 tests)
+A real money bug, not a display artifact: at a large enough one-sided price skew,
+`LmsrMath.purchaseCost`'s `cost(after) - cost(before)` subtraction rounds to exactly `0.0` in
+double precision, so a buyer got shares for free. `TradeExecutor.participate` gains
+`MIN_MEANINGFUL_COST = 0.005` and a guard placed immediately after `cost` is computed —
+**before** `commissionAmount`/`totalPaid` derive from it and well before the first mutation
+(`chosenOption.addShares`), preserving the same fail-before-mutate discipline as the existing
+overflow guard. Rejects with `IllegalTradeException` (the same category as every other trading
+rejection there); no new exception type. The check is deliberately against the **actual computed
+cost**, not a pre-guessed `shares/b` ratio, so it can't false-reject a genuinely tiny-but-real
+cost and can't miss an edge a fixed ratio wouldn't cover.
+
+Three new tests in `TradeExecutorTest` (+58 lines) reproducing the real investigated `b=50`
+scenario via a new `newEventWithLiquidityParameter` helper (the existing `newEvent` hardcodes
+`b=100` through its `commissionRate` parameter): a bit-identical `$0.00` cost at 2000
+pre-existing shares → rejected **with explicit assertions that shares, MM account balance and
+buyer balance are all unchanged**; a non-bit-exact `~$0.0046` cost at 700 shares → also rejected
+(proving "effectively $0.00", not just literal zero); and `~$0.0126` at 650 shares → still
+succeeds, cost matching `LmsrMath.purchaseCost` exactly. 74 → 77 tests, all passing.
+
+Also in this commit: a **correction to documentation shipped two commits earlier**. `CLAUDE.md`
+open-item 11 and `CreateEventDialogBuilder`'s threshold comment had cited `ln(10^16) ≈ 37` —
+which measures the wrong mechanism (that's roughly where the instantaneous `price()` ratio would
+underflow, needing a ~710 gap, essentially unreachable). Re-derived against the real code by
+binary search: the reachable mechanism needs only a **27-32×`b`** one-sided gap. In real volume:
+`b=5` at ~157 shares, **`b=50` (this repo's own `ex2-orderbook.xml`, an ordinary pre-existing
+fixture) at ~1,507**, `b=100` (the lecturer's own typical value) at ~3,000, `b=1000` at ~27,000 —
+i.e. **every** `b` is susceptible, not just deliberately tiny ones. The correction is recorded as
+a correction in `CLAUDE.md` rather than silently rewritten.
+
+### `ec5f32c` — 2026-09-07 — Polish Create Event dialog (resize, label truncation, LMSR small-b warning)
+Three fixes to the Ex2 Create Event bonus, two of them spec-relevant rather than cosmetic.
+**Resize:** JavaFX `Dialog` defaults to non-resizable, and CLAUDE.md's resize rule applies to any
+window, not just the primary `Stage` — added `setResizable(true)`. **Truncation:** every form
+label switched from `new Label(...)` to the existing `wrappingLabel` helper (the same one that
+already fixed this elsewhere), which then exposed a *second* bug — wrapping alone let the label
+column be squeezed to one character per line, fixed structurally with a `ColumnConstraints`
+label column (`minWidth=140`, fits "Commission Rate (%):" on one line) and `Priority.ALWAYS`
+hgrow on the field column, so resizing consumes the input fields, not the labels.
+
+**Two further bugs found only because the fix was verified with a real resize harness rather
+than assumed:** (1) `DialogPane.setMinWidth/setMinHeight` is only a layout preference on the
+`Region` — it does not floor the actual OS `Window` (the harness read `Stage.getMinWidth()` as
+`0.0` after both calls), so the real floor is applied in `setOnShown`; (2) `Stage` dimensions
+include OS window chrome while `DialogPane`'s minimums are content-area sizes, so applying the
+same raw numbers to both let the content shrink *below* its own declared minimum (harness caught
+the `DialogPane` clipping past the scene at 442.7px tall inside a required 480). Chrome is now
+measured at runtime and added — and that computation itself needed deferring one extra pulse via
+`Platform.runLater`, because at `setOnShown` the Scene's dimensions are still unresolved `NaN`,
+and `setMinWidth(NaN)` is a *silent* no-op (every comparison against `NaN` is false).
+
+**LMSR small-`b` warning:** a soft, non-blocking caption under the liquidity-parameter field,
+shown live while typing whenever `b < 50`, explaining that a very small `b` can make the losing
+option's trades price at exactly $0.00. Deliberately informational only — never blocks Create —
+since whether it bites depends on future trading volume the creator can't know, per this
+project's standing principle of not adding restrictions the spec doesn't require. Verified with a
+harness sweeping the exact boundary (`""`/`abc`/`0`/`-5` → hidden; `1`/`10`/`49` → shown;
+`50`/`51`/`1000` → hidden) and confirming nothing clips at the height floor with the caption
+visible.
+
+### `6002045` — 2026-09-05 — docs: correct/update the current Mermaid architecture diagram to reflect Order Book, mint, Users, and both bonuses
+`ARCHITECTURE.md`'s diagram had drifted badly since the Ex1/LMSR skeleton and was actively
+misleading. Concrete staleness fixed: `GuessMarketApp -.->|"not yet calls"| IEngine` was flatly
+wrong (it calls `createDefault()` and hands the engine to the controller); the `User` domain
+class — central to all of Ex2 — was **entirely absent**; so was `OrderResultDto`;
+`MainViewController` and `OrderBookPanelBuilder` had **zero outgoing edges** despite being the
+app's primary `IEngine`/DTO consumers; `OrderBookExecutor` was a node with no edges at all
+despite Order Book being fully implemented; `Event`'s composition of `OrderBookMarket` (and
+`OrderBookMarket → OptionBook → Order`) was unwired; and `EngineStateSnapshot → User` was missing
+after the save/load-state bonus was extended to users. Documentation only — no code touched.
+Conscious decisions recorded at the time: `LoadedState`/`LoadedFile` stay omitted as small
+internal transfer objects (consistent with the diagram's existing abstraction level), and the
+Skins/Graphs bonuses need no new nodes since neither added a `.java` file.
+
+### `dc2ec80` — 2026-09-05 — Bonus: Graphs — event price-history and user balance-history charts, with disclosed reconstruction-accuracy caveat
+Two `LineChart`s built from data the DTOs already carry, with **zero engine changes**
+(`javafx.scene.chart` confirmed already inside `javafx.controls.jar`, so no build/module-path
+change either). Event panel: one line per option, plotting that option's own trades in
+chronological order, x-axis a trade sequence index rather than a timestamp `CategoryAxis` —
+a mint's two `Trade`s share one `LocalDateTime.now()` call, so timestamps can genuinely collide
+while a sequence index can't. Uniform across LMSR and Order Book (including mint fills) since
+`Event.addTrade` is called identically by every trading path. User panel: balance reconstructed
+by walking the merged cross-event purchase history **backward** from the known-true current
+balance.
+
+**Two things this commit is deliberately honest about rather than quietly approximating.** The
+per-option lines reflect only that option's *own* trades — for LMSR a trade on A also moves B's
+price on the shared curve, but recomputing it would mean `gui` reaching past `IEngine`/DTOs into
+`engine.domain.lmsr`, a layering line this project has never crossed. And the balance
+reconstruction is only exact at its most recent point: any unrecorded balance-changing event
+(close-time payouts, MM subsidy debit/return, an Order Book seller's proceeds) does **not** cause
+a local flat spot — it bakes a constant offset that propagates backward through every earlier
+point, and multiple such events compound. That limitation is disclosed **on screen** in a caption
+under the chart, not only in a code comment a grader would never read.
+
+A real ordering bug was found during verification, not assumed away: `tradeHistory()` is
+newest-first, and `List.sort` is stable, so merging the newest-first lists and sorting by
+timestamp left same-timestamp trades in *reversed* order. Fixed by reversing each participation's
+list to true chronological order (real insertion order, immune to ties) before merging. Verified
+against a deliberately constructed unrecorded-event case showing the predicted offset to machine
+precision (an exact −138.63). Also added chart-specific selectors to `styles-dark.css` and
+`styles-high-contrast.css` (+54/+55) — `LineChart` styles through its own selector set, so
+without them a chart would keep Modena's light plot background under either dark scheme;
+`styles.css` (Default) deliberately untouched.
+
 ### `95ebd5a` — 2026-09-05 — Bonus: Create New Event — user creates a brand-new LMSR/Order Book event and becomes its MM, reusing openEvent entirely
 New `IEngine.createEvent(CreateEventRequestDto)` lets an existing, loaded user define a
 brand-new event from scratch and become its MM. New `dto.CreateEventRequestDto` (12-field
