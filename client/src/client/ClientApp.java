@@ -1,5 +1,8 @@
 package client;
 
+import java.util.Timer;
+import java.util.TimerTask;
+
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.fxml.FXMLLoader;
@@ -26,8 +29,16 @@ public class ClientApp extends Application {
     // address, and grading runs client and server on the same machine.
     private static final String BASE_URL = "http://localhost:8080/GuessMarket";
 
+    // Within the spec's own 0.5-2s range for periodic polling -- a middle value, deliberately: noticeably below
+    // the 2s ceiling (stays responsive for a live cross-client demo) without pushing toward the 0.5s floor
+    // (avoids unnecessary server/bandwidth load from the full-information events/users polls). A judgment call to
+    // tune after an actual hands-on feel-check, not something derived from measurement.
+    private static final long POLL_INTERVAL_MS = 1000;
+
     private HttpEngineClient httpEngineClient;
     private Stage primaryStage;
+    private MainViewController mainViewController;
+    private Timer pollTimer;
 
     // Standard JavaFX launch entry point; hands off to start(Stage) via the JavaFX runtime.
     public static void main(String[] args) {
@@ -46,6 +57,15 @@ public class ClientApp extends Application {
         primaryStage.setResizable(true);
         primaryStage.setMinWidth(640);
         primaryStage.setMinHeight(420);
+        // The only setOnCloseRequest anywhere in this repo -- needed so the periodic-polling Timer (started once
+        // login succeeds, see showMainShell) stops promptly on window close rather than continuing to fire against
+        // a server nobody's watching any more. Belt-and-suspenders alongside the Timer's own daemon flag, which
+        // alone would still let the JVM exit even if this hook were somehow skipped, just not as promptly.
+        primaryStage.setOnCloseRequest(event -> {
+            if (pollTimer != null) {
+                pollTimer.cancel();
+            }
+        });
 
         showLoginScreen();
         primaryStage.show();
@@ -78,14 +98,48 @@ public class ClientApp extends Application {
             MainViewController controller = loader.getController();
             controller.setEngine(httpEngineClient);
             controller.setUsername(username);
+            this.mainViewController = controller;
+
+            // Mirrors runLoad's own onSucceeded shape (reveal, then refresh both tabs) minus the filePathLabel
+            // update, which has no meaning before any upload happens in this window. Events/users are shared
+            // server-side state under Exercise 3 -- a fresh logged-in window has real data to show immediately
+            // (at minimum yourself, in the users list; possibly events another client already uploaded), so there
+            // is no reason to hide either tab behind "has THIS window personally loaded a file" the way Ex2's
+            // single in-process engine required. See MainViewController.revealLoadedContent's own doc.
+            controller.revealLoadedContent();
+            controller.refreshEvents();
+            controller.refreshUsers();
 
             Scene scene = new Scene(root, INITIAL_WIDTH, INITIAL_HEIGHT);
             applyStylesheet(scene);
             primaryStage.setScene(scene);
             forceExtraLayoutPass();
+            startPolling();
         } catch (Exception e) {
             throw new IllegalStateException("Could not load the main application view", e);
         }
+    }
+
+    // Starts the real periodic sync -- everything except your own actions' instant refresh-after-success (those
+    // call sites are unchanged) depends on this to surface OTHER users' changes. TimerTask/Timer per
+    // docs-reference/ex3-plan.md's own lecture-confirmed client-side mechanism; the whole tick body runs inside
+    // Platform.runLater since Async.run (which refreshEvents/refreshUsers/pollLedger each use internally) has,
+    // until now, only ever been invoked from the FX Application Thread -- a raw TimerTask.run() executes on the
+    // Timer's own background thread instead, so this avoids ever exercising that untested path. Deliberately
+    // reuses the exact same refreshEvents/refreshUsers/pollLedger entry points every click-driven action already
+    // uses rather than duplicating HTTP-calling logic on the Timer's own thread.
+    private void startPolling() {
+        pollTimer = new Timer("guessmarket-poll", true); // daemon -- see the setOnCloseRequest hook's own comment
+        pollTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                Platform.runLater(() -> {
+                    mainViewController.refreshEvents();
+                    mainViewController.refreshUsers();
+                    mainViewController.pollLedger(httpEngineClient::getLedgerDelta);
+                });
+            }
+        }, POLL_INTERVAL_MS, POLL_INTERVAL_MS);
     }
 
     private void applyStylesheet(Scene scene) {

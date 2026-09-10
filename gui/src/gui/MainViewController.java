@@ -1,6 +1,7 @@
 package gui;
 
 import java.io.File;
+import java.util.function.IntFunction;
 
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
@@ -11,6 +12,7 @@ import javafx.scene.control.ProgressIndicator;
 import javafx.stage.FileChooser;
 import javafx.stage.Window;
 
+import dto.LedgerDeltaDto;
 import engine.IEngine;
 import exception.UserAlreadyExistsException;
 import gui.common.Dialogs;
@@ -27,8 +29,6 @@ import gui.tabs.UsersTabController;
 // other tab. That keeps the wiring a tree (shell -> tabs) rather than a cycle, and means a different shell (e.g.
 // Exercise 3's client app) can host the same tabs by implementing the same interface.
 public class MainViewController implements TabCoordinator {
-
-    private static final int ARTIFICIAL_DELAY_MS = 1500;
 
     // Ex1/Ex2's plain IEngine.createDefault() launch (GuessMarketApp, run.bat) has no login screen at all -- Stage 1
     // already made IEngine.loadEventsFile(path, uploaderUsername) require a real, registered uploader identity, so
@@ -113,6 +113,14 @@ public class MainViewController implements TabCoordinator {
         usersTabController.refreshUsersList();
     }
 
+    // Delegates to the Users tab's own ledger-delta poll -- a no-op there unless it's currently showing the
+    // logged-in user's own account. Called once per periodic tick by client.ClientApp's Timer, alongside
+    // refreshEvents/refreshUsers; fetchDelta is supplied by the caller (HttpEngineClient::getLedgerDelta in
+    // practice) so neither this class nor UsersTabController ever needs a dependency on the client module.
+    public void pollLedger(IntFunction<LedgerDeltaDto> fetchDelta) {
+        usersTabController.pollLedger(fetchDelta);
+    }
+
     // Swaps the Scene's active stylesheet to the chosen scheme -- Scene.getStylesheets() is observable, so
     // Scene/Parent re-run CSS resolution across the whole existing scene graph on the next pulse, not just newly
     // created nodes; this is standard JavaFX runtime theme switching, not the app's own custom mechanism.
@@ -145,9 +153,11 @@ public class MainViewController implements TabCoordinator {
         runLoad(selectedFile);
     }
 
-    // Runs IEngine.loadEventsFile off the FX thread, showing the progress indicator for the duration (plus a short
-    // artificial delay). uploaderUsername is the real logged-in user under Exercise 3's client, or a lazily
-    // self-registered placeholder under the plain in-process launch, which has no login screen to get a real one from.
+    // Runs IEngine.loadEventsFile off the FX thread, showing the progress indicator for the duration.
+    // uploaderUsername is the real logged-in user under Exercise 3's client, or a lazily self-registered
+    // placeholder under the plain in-process launch, which has no login screen to get a real one from. No
+    // artificial delay any more -- Stage 3 made the upload genuinely asynchronous over real HTTP, so the progress
+    // indicator now reflects actual network latency instead of a fixed stand-in for it.
     private void runLoad(File file) {
         String path = file.getAbsolutePath();
         String uploaderUsername = username != null ? username : IN_PROCESS_PLACEHOLDER_USERNAME;
@@ -161,7 +171,6 @@ public class MainViewController implements TabCoordinator {
                         // Already registered by an earlier load in this same in-process run -- fine, reuse it.
                     }
                 }
-                Thread.sleep(ARTIFICIAL_DELAY_MS);
                 engine.loadEventsFile(path, uploaderUsername);
                 return null;
             }
@@ -185,8 +194,14 @@ public class MainViewController implements TabCoordinator {
     }
 
     // Fans the reveal out to both tabs, each of which swaps its own "No file loaded" placeholder for its real
-    // content. Idempotent -- safe to call on every successful load, not just the first.
-    private void revealLoadedContent() {
+    // content. Idempotent -- safe to call from more than one trigger. Two legitimate callers: runLoad's own
+    // onSucceeded (a real file load, in-process or Exercise 3), and client.ClientApp.showMainShell right after
+    // login succeeds -- events/users are shared SERVER-side state under Exercise 3 (a user exists from POST /login
+    // alone, no file involved; events accumulate from ANY client's uploads, not just this window's own), so a
+    // fresh logged-in window has no reason to hide either tab behind "has this window personally loaded a file" --
+    // that was an Ex2-era assumption (one shared in-process engine, nothing else could populate anything) that no
+    // longer holds. Public specifically so ClientApp (a different module) can call it.
+    public void revealLoadedContent() {
         eventsTabController.revealLoadedContent();
         usersTabController.revealLoadedContent();
     }

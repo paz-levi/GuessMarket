@@ -1,15 +1,27 @@
 package gui.tabs;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.function.IntFunction;
+
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 
+import dto.LedgerDeltaDto;
+import dto.TransactionRecordDto;
 import dto.UserDetailDto;
 import dto.UserEventParticipationDto;
 import dto.UserSummaryDto;
@@ -48,6 +60,24 @@ public class UsersTabController {
     // Null under the plain in-process launch (no login screen) -- see showUserEventDetails's own doc for what that
     // means for the per-event action controls rendered below.
     private String username;
+
+    // Ledger state for whichever render currently shows the logged-in user's OWN account (see viewingOwnAccount
+    // below) -- persists across renders so pollLedger can append to the exact ObservableList the currently-visible
+    // ListView (if any) is bound to, without needing a full re-render for every periodic tick. Kept in ASCENDING
+    // sequence order deliberately (a considered UX choice, not just implementation convenience): that's the shape
+    // delta batches already arrive in (LedgerDeltaDto.entries() is ascending), so appending a poll's results is a
+    // trivial addAll with zero re-sort, and it mirrors a chat log's own "grows downward" feel -- matching
+    // docs-reference/ex3-plan.md's explicit framing of the ledger as "append-only, like chat messages", a
+    // deliberate departure from this app's other newest-first tables (trade history, participations).
+    private final ObservableList<TransactionRecordDto> ledgerItems = FXCollections.observableArrayList();
+    private int ledgerSinceCursor;
+
+    // True only when the currently-rendered detail panel is the logged-in user's own -- the single source of truth
+    // for two separate gates: whether the Deposit control is shown at all (see the design-correctness note this was
+    // built around: the server always deposits into the SESSION user regardless of any username the client sends,
+    // so a Deposit control on another user's page would silently deposit into your own account while appearing to
+    // target theirs -- it must only ever be reachable here), and whether pollLedger's periodic tick does anything.
+    private boolean viewingOwnAccount;
 
     // Both injected by the hosting shell right after the FXML tree is built -- never during initialize(), which
     // runs before the shell has either of them. Nothing in initialize() touches the engine, so that ordering is safe.
@@ -93,9 +123,9 @@ public class UsersTabController {
     }
 
     // Re-reads the full user list from the engine and refreshes the list view; called right after a successful
-    // load, and whenever any action anywhere reports that user data changed (via the coordinator). Every IEngine
-    // call is a real network round-trip once this is backed by HttpEngineClient, so it runs on a background Task --
-    // see gui.common.Async.
+    // load, whenever any action anywhere reports that user data changed (via the coordinator), and on every
+    // periodic poll tick (see client.ClientApp's Timer). Every IEngine call is a real network round-trip once this
+    // is backed by HttpEngineClient, so it runs on a background Task -- see gui.common.Async.
     public void refreshUsersList() {
         Async.run(engine::listUsers,
                 users -> usersListView.getItems().setAll(users),
@@ -103,7 +133,8 @@ public class UsersTabController {
     }
 
     // Looks up one user's full detail view and renders it in the right-hand details panel; called whenever the
-    // Users list selection changes. Runs on a background Task -- see refreshUsersList's own note above.
+    // Users list selection changes, and after a successful deposit (see handleDepositClick). Runs on a background
+    // Task -- see refreshUsersList's own note above.
     private void showUserDetails(String selectedUsername) {
         Async.run(() -> engine.getUser(selectedUsername),
                 detail -> renderUserDetails(detail, null),
@@ -121,10 +152,13 @@ public class UsersTabController {
     }
 
     // Rebuilds the details panel from scratch: the account-balance badge, the balance-history chart, the
-    // events-participation list, and a per-event sub-panel (details + action controls) driven by whichever
-    // participation gets selected. If eventNameToReselect is non-null, that participation is re-selected
-    // programmatically after rebuilding the list.
+    // events-participation list, a per-event sub-panel (details + action controls) driven by whichever
+    // participation gets selected, and -- only when this is the logged-in user's OWN account (viewingOwnAccount) --
+    // the deposit form and the transaction ledger. If eventNameToReselect is non-null, that participation is
+    // re-selected programmatically after rebuilding the list.
     private void renderUserDetails(UserDetailDto detail, String eventNameToReselect) {
+        viewingOwnAccount = username != null && username.equals(detail.username());
+
         Label balanceLabel = Labels.wrapping("Balance: " + Formatters.dollars(detail.balance())
                 + (detail.blocked() ? "  (BLOCKED)" : ""));
         balanceLabel.getStyleClass().add("balance-badge");
@@ -149,7 +183,7 @@ public class UsersTabController {
             }
         });
 
-        userDetailsBox.getChildren().setAll(
+        List<Node> children = new ArrayList<>(List.of(
                 balanceBadge,
                 BalanceHistoryChartBuilder.build(detail),
                 Labels.sectionHeader("Events Participation / Owner:"),
@@ -157,7 +191,30 @@ public class UsersTabController {
                 new Separator(),
                 Labels.sectionHeader("Single event details and trade:"),
                 singleEventDetailsBox
-        );
+        ));
+
+        if (viewingOwnAccount) {
+            seedLedger(detail.transactions());
+
+            ListView<TransactionRecordDto> ledgerListView = new ListView<>(ledgerItems);
+            ledgerListView.setPrefHeight(PARTICIPATION_LIST_HEIGHT);
+            ledgerListView.setCellFactory(list -> new ListCell<>() {
+                @Override
+                protected void updateItem(TransactionRecordDto transaction, boolean empty) {
+                    super.updateItem(transaction, empty);
+                    setText(empty || transaction == null ? null : Formatters.transactionRow(transaction));
+                }
+            });
+
+            children.add(new Separator());
+            children.add(Labels.sectionHeader("Deposit Funds:"));
+            children.add(buildDepositForm(detail.username()));
+            children.add(new Separator());
+            children.add(Labels.sectionHeader("Transaction Ledger:"));
+            children.add(ledgerListView);
+        }
+
+        userDetailsBox.getChildren().setAll(children);
 
         if (eventNameToReselect != null) {
             for (UserEventParticipationDto participation : participationListView.getItems()) {
@@ -167,6 +224,90 @@ public class UsersTabController {
                 }
             }
         }
+    }
+
+    // Resets the ledger to exactly what this fresh detail snapshot carries -- called on every full render of the
+    // own-account view, so the ledger never drifts across re-renders (a full render already re-fetches getUser, so
+    // re-seeding from that same fresh transactions() list is free). transactions() is newest-first (its own
+    // documented convention); reversed once here to seed the ascending list pollLedger's delta batches append to.
+    private void seedLedger(List<TransactionRecordDto> newestFirst) {
+        ledgerItems.clear();
+        List<TransactionRecordDto> ascending = new ArrayList<>(newestFirst);
+        Collections.reverse(ascending);
+        ledgerItems.addAll(ascending);
+        ledgerSinceCursor = ascending.isEmpty() ? 0 : ascending.get(ascending.size() - 1).sequence();
+    }
+
+    // Builds the deposit form: an amount TextField + button, bound to ownUsername (always the logged-in user's own
+    // name here -- see the class-level viewingOwnAccount doc for why this is the only place a deposit control may
+    // ever appear). Client-side validation mirrors every other form in this app: a genuine parse failure or a
+    // non-positive amount is the only UI-level check, everything else (the server's own > 0 rule) is left to
+    // IEngine.depositFunds to reject.
+    private HBox buildDepositForm(String ownUsername) {
+        TextField amountField = new TextField();
+        amountField.setPromptText("Amount");
+        amountField.setPrefColumnCount(6);
+
+        Button depositButton = new Button("Deposit");
+        depositButton.setOnAction(event -> handleDepositClick(ownUsername, amountField, depositButton));
+
+        return new HBox(8, amountField, depositButton);
+    }
+
+    // Deposits via the existing IEngine.depositFunds, then re-renders this same own-account view (picking up the
+    // new balance and the new DEPOSIT ledger line in one fetch) and refreshes the users list -- deliberately NOT
+    // coordinator.refreshEvents() too, unlike every trading action's paired refresh, since a deposit changes no
+    // event-side state. Runs on a background Task; the button is disabled for the call's duration to prevent a
+    // double-submit, matching every other money-moving form in this app.
+    private void handleDepositClick(String ownUsername, TextField amountField, Button depositButton) {
+        double amount;
+        try {
+            amount = Double.parseDouble(amountField.getText().trim());
+        } catch (NumberFormatException e) {
+            Dialogs.showError("Invalid input", "Amount must be a number.");
+            return;
+        }
+        if (amount <= 0) {
+            Dialogs.showError("Invalid input", "Amount must be positive.");
+            return;
+        }
+
+        depositButton.setDisable(true);
+        double depositedAmount = amount;
+        Async.run(() -> {
+                    engine.depositFunds(ownUsername, depositedAmount);
+                    return null;
+                },
+                v -> {
+                    depositButton.setDisable(false);
+                    Dialogs.showDepositConfirmation(depositedAmount);
+                    showUserDetails(ownUsername);
+                    coordinator.refreshUsers();
+                },
+                failure -> {
+                    depositButton.setDisable(false);
+                    Dialogs.showError("Could not deposit funds", failure);
+                });
+    }
+
+    // Called once per periodic poll tick (see client.ClientApp's Timer) -- a no-op whenever the currently-rendered
+    // account isn't the logged-in user's own (viewingOwnAccount), so no network call happens for a page nobody's
+    // ledger-watching. fetchDelta is supplied by the caller (HttpEngineClient::getLedgerDelta in practice) rather
+    // than called directly, so this class -- and the whole gui module -- never needs a dependency on client.http;
+    // LedgerDeltaDto/TransactionRecordDto live in engine's own dto package, which gui already depends on. A single
+    // missed poll tick is swallowed rather than popping an error dialog every second the network hiccups.
+    public void pollLedger(IntFunction<LedgerDeltaDto> fetchDelta) {
+        if (!viewingOwnAccount) {
+            return;
+        }
+        Async.run(() -> fetchDelta.apply(ledgerSinceCursor),
+                delta -> {
+                    if (!delta.entries().isEmpty()) {
+                        ledgerItems.addAll(delta.entries());
+                        ledgerSinceCursor = delta.version();
+                    }
+                },
+                failure -> { });
     }
 
     // Looks up one event's full status and renders it (details + action controls) in the given container; called

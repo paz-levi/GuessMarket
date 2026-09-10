@@ -6,6 +6,43 @@ scannable in seconds.
 
 ---
 
+### `f9ff926` — 2026-09-10 — Fix: Events-tab Open/Close controls wrongly suppressed under the Ex3 client (fixedUsername/showOpenControl had collapsed into one signal)
+
+A real UI bug, caught by manual testing, not a cosmetic one: the Events tab showed the
+`NOT_STARTED` placeholder text ("its market maker can open it from the Events tab") instead of a
+real Open Event form — on the Events tab itself, whenever logged in. **Root cause:**
+`EventActionsPanelBuilder.build`'s `NOT_STARTED` branch gated on `fixedUsername == null` to
+decide "are we on the Events tab" — a proxy that was only ever reliable in Ex2, where the Events
+tab had no session concept at all and therefore always passed literal `null`; the Users tab
+(always a non-null viewed-user name) was the only other caller. Stage 3 gave
+`MainViewController` a real, non-null `username` field, threaded straight into that same
+`fixedUsername` parameter — so the moment a real session existed, the Events tab's own call
+started satisfying `fixedUsername != null` too, and silently took the Users-tab-only placeholder
+branch instead. Two genuinely different concepts ("who acts" and "which tab is this") had been
+collapsed into one signal during the Stage 3 refactor.
+
+**Fix:** un-collapsed them. `build` now takes a separate `boolean showOpenControl`, set once per
+call site (`true` from `EventsTabController`, `false` from `UsersTabController`) and never
+derived from `fixedUsername` — the Users-tab suppression itself is unchanged, just driven by its
+own explicit signal instead of an accidental proxy.
+
+**`buildCloseEventForm` fixed proactively for the identical dormant pattern**, before Stage 4's
+deposit UI could make it reachable and resurface the same bug: it (and `buildOpenEventForm`,
+fixed alongside it) still unconditionally called `UsernamePicker.build(engine)`, ignoring
+`fixedUsername` entirely — unlike `buildParticipateForm`, already correct. Under the HTTP client
+that would show a dropdown of every registered user for "who's closing/opening," even though the
+actual HTTP call always acts as the real session user regardless of what's picked. Both now
+mirror `buildParticipateForm`'s exact pattern: a fixed `"Closing/Opening as: <username>"` label
+when `fixedUsername` is non-null, a picker only in the `null` in-process-fallback case.
+
+Verified directly against `EventActionsPanelBuilder.build`'s real output (a throwaway JavaFX
+harness, `Platform.startup` + direct calls, no HTTP/full app needed): a `NOT_STARTED` event with
+`fixedUsername="alice"` renders a real Open Event button when `showOpenControl=true` and the
+unchanged placeholder when `showOpenControl=false`; an `ACTIVE` LMSR event with
+`fixedUsername="alice"` renders real "Buying as: alice"/"Closing as: alice" labels and zero
+username pickers, while `fixedUsername=null` falls back to a picker in both forms, exactly as
+before.
+
 ### `26e2993` — 2026-09-10 — Ex3 Stage 3: HTTP-backed JavaFX client, login screen, gui's Stage 1 breakage fixed (92/92 tests unaffected)
 
 New `client` module: a login screen plus `HttpEngineClient implements IEngine`, the first

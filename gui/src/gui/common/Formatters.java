@@ -10,6 +10,8 @@ import dto.CommissionMode;
 import dto.EventStatus;
 import dto.EventSummaryDto;
 import dto.TradingMethod;
+import dto.TransactionRecordDto;
+import dto.TransactionType;
 import dto.UserEventParticipationDto;
 import dto.UserSummaryDto;
 
@@ -56,6 +58,12 @@ public final class Formatters {
         return value == null ? "—" : dollars(value);
     }
 
+    // A transaction ledger row's own convention: the sign is the point (credited vs. debited), so it's always
+    // shown explicitly rather than relying on a bare "-" prefix blending in, or a positive amount looking unsigned.
+    public static String signedDollars(double amount) {
+        return (amount >= 0 ? "+" : "-") + dollars(Math.abs(amount));
+    }
+
     public static String tradeTimestamp(LocalDateTime timestamp) {
         return timestamp.format(TRADE_TIMESTAMP_FORMAT);
     }
@@ -79,6 +87,21 @@ public final class Formatters {
         return method == TradingMethod.ORDER_BOOK ? "Order Book" : "LMSR"; // LMSR is a domain term, not an abbreviation to expand
     }
 
+    // Same "raw enum names aren't user-facing text" convention as status/tradingMethod above.
+    public static String transactionType(TransactionType type) {
+        return switch (type) {
+            case DEPOSIT -> "Deposit";
+            case EVENT_OPEN_FUNDING -> "Event Open Funding";
+            case LMSR_PURCHASE -> "LMSR Purchase";
+            case ORDER_BUY_FILL -> "Order Buy Fill";
+            case ORDER_SELL_PROCEEDS -> "Order Sell Proceeds";
+            case MINT_PURCHASE -> "Mint Purchase";
+            case WINNINGS_PAYOUT -> "Winnings Payout";
+            case COMMISSION_RECEIVED -> "Commission Received";
+            case LEFTOVER_SUBSIDY_RETURNED -> "Leftover Subsidy Returned";
+        };
+    }
+
     // Formats one event's summary row: name, status, trading method, commission rate/mode — every field EventSummaryDto already carries.
     public static String eventSummary(EventSummaryDto event) {
         return event.eventName() + "  —  " + status(event.status()) + "  —  " + tradingMethod(event.tradingMethod())
@@ -94,6 +117,15 @@ public final class Formatters {
     public static String participation(UserEventParticipationDto participation) {
         return participation.eventName() + "  —  " + status(participation.eventStatus())
                 + "  —  " + tradingMethod(participation.tradingMethod());
+    }
+
+    // One transaction ledger row: type, which event it's tied to (blank for a DEPOSIT -- eventName is null exactly
+    // then, per TransactionRecordDto's own doc), the signed amount, and the running balance it left the user with.
+    public static String transactionRow(TransactionRecordDto transaction) {
+        String eventPart = transaction.eventName() != null ? "  —  " + transaction.eventName() : "";
+        return tradeTimestamp(transaction.timestamp()) + "  " + transactionType(transaction.type()) + eventPart
+                + "  —  " + signedDollars(transaction.amount())
+                + "  (balance " + dollars(transaction.balanceAfter()) + ")";
     }
 
     // One option's summary line: "price X, shares Y" for LMSR (the curve-price concept is real there), "shares Y"

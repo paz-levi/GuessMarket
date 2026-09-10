@@ -61,6 +61,16 @@ public final class Dialogs {
         alert.showAndWait();
     }
 
+    // Shows a simple deposit confirmation, matching showTradeConfirmation's own pattern -- the caller's own
+    // re-render right after this already reflects the new balance in the balance badge, so this dialog only needs
+    // to confirm the amount, not repeat the resulting balance.
+    public static void showDepositConfirmation(double amount) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle("Deposit Complete");
+        alert.setHeaderText("Deposited " + Formatters.dollars(amount));
+        alert.showAndWait();
+    }
+
     // Shows the Order Book fill breakdown, matching showTradeConfirmation's own pattern. "Total paid"/"Total
     // received" is chosen by side, since OrderResultDto.totalPaid()'s own doc comment defines it as paid for a buy
     // but received for a sell -- always saying "paid" would misdescribe a sell.

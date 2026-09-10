@@ -32,6 +32,7 @@ import dto.CreateEventRequestDto;
 import dto.EventFilterDto;
 import dto.EventStatusDto;
 import dto.EventSummaryDto;
+import dto.LedgerDeltaDto;
 import dto.OrderResultDto;
 import dto.SubmitOrderRequestDto;
 import dto.TradeConfirmationDto;
@@ -89,6 +90,7 @@ public final class HttpEngineClient implements IEngine {
     private static final String PARAM_TRADING_METHOD = "tradingMethod";
     private static final String PARAM_STATUS = "status";
     private static final String PARAM_COMMISSION_MODE = "commissionMode";
+    private static final String PARAM_SINCE = "since";
     private static final String MULTIPART_FILE_PART = "file";
 
     // No real filename is available for the bare-InputStream overload (nothing in gui currently calls it -- only
@@ -258,6 +260,19 @@ public final class HttpEngineClient implements IEngine {
         Map<String, String> query = username != null ? Map.of(PARAM_USERNAME, username) : Map.of();
         HttpRequest request = HttpRequest.newBuilder(uri("/user", query)).GET().build();
         return handleResponse(send(request), UserDetailDto.class);
+    }
+
+    // Not part of IEngine -- LedgerDeltaDto has no engine-level equivalent at all (LedgerServlet builds it itself
+    // by slicing UserDetailDto.transactions() server-side; see that servlet's own doc comment). The only client-only
+    // method on this class, added specifically for Stage 4's delta-polling ledger display: GET /user/ledger?since=
+    // is session-scoped (always the caller's own ledger, never a ?username= override), entries come back ascending
+    // by sequence. LedgerDeltaDto.class deserializes correctly through the shared handleResponse plumbing with no
+    // TypeToken needed -- Gson resolves the nested List<TransactionRecordDto> field reflectively, the same way
+    // getUser's UserDetailDto.class already does today.
+    public LedgerDeltaDto getLedgerDelta(int since) {
+        HttpRequest request = HttpRequest.newBuilder(
+                uri("/user/ledger", Map.of(PARAM_SINCE, String.valueOf(since)))).GET().build();
+        return handleResponse(send(request), LedgerDeltaDto.class);
     }
 
     // username is accepted for IEngine's transport-agnostic contract but never placed on the wire -- the server
