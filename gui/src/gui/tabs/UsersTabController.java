@@ -185,7 +185,10 @@ public class UsersTabController {
                     EventStatusPanelBuilder.append(container, status);
                     container.getChildren().add(new Separator());
                     // Same status gating as the Events tab: never show a control that can only fail.
-                    container.getChildren().add(EventActionsPanelBuilder.build(engine, coordinator, status, actingUsername,
+                    // showOpenControl=false: the Users tab never shows an Open control (Events-tab-only), independent
+                    // of actingUsername -- see EventActionsPanelBuilder.build's own doc for why these are kept as
+                    // two separate parameters rather than one collapsed into the other.
+                    container.getChildren().add(EventActionsPanelBuilder.build(engine, coordinator, status, actingUsername, false,
                             newStatus -> refreshUserDetailsAfterPurchase(viewedUsername, eventName)));
                 },
                 failure -> Dialogs.showError("Could not load event details", failure));

@@ -32,15 +32,24 @@ public final class EventActionsPanelBuilder {
     }
 
     // Picks the one action control that makes sense for an event's current status: a NOT_STARTED event can only be
-    // opened (by its MM), an ACTIVE one can only be traded on, and a CLOSED one accepts neither. fixedUsername is
-    // the real logged-in username under Exercise 3's client, or the Users tab's already-selected user -- either
-    // way, non-null; only the Events tab's plain in-process fallback (no login screen at all) ever passes null,
-    // which is when a picker is shown instead.
+    // opened (by its MM, and only from the Events tab -- see showOpenControl below), an ACTIVE one can only be
+    // traded on, and a CLOSED one accepts neither.
+    //
+    // fixedUsername and showOpenControl are deliberately two SEPARATE signals, not one collapsed into the other:
+    // fixedUsername answers "who acts" (the real logged-in username under Exercise 3's client, the Users tab's
+    // already-selected user, or null under the plain in-process launch's Events-tab fallback, which is when a
+    // picker is shown instead) -- it says nothing about which tab called this. showOpenControl answers "which tab
+    // is this" (true only from the Events tab; the Users tab deliberately has no Open control, scoped to the
+    // Events tab, regardless of who's logged in). These used to be the same parameter (fixedUsername == null stood
+    // in for "we're on the Events tab" back when only the in-process launch existed and the Events tab always
+    // passed null) -- that collapsed the moment Exercise 3 gave the Events tab a real, non-null logged-in username
+    // too, which made every NOT_STARTED event on the Events tab wrongly fall into the Users-tab-only placeholder
+    // branch instead of showing the real Open Event form. Fixed by un-collapsing them back into two parameters.
     public static VBox build(IEngine engine, TabCoordinator coordinator, EventStatusDto status,
-                             String fixedUsername, Consumer<EventStatusDto> onSuccess) {
+                             String fixedUsername, boolean showOpenControl, Consumer<EventStatusDto> onSuccess) {
         return switch (status.status()) {
-            case NOT_STARTED -> fixedUsername == null
-                    ? buildOpenEventForm(engine, coordinator, status.eventName(), onSuccess)
+            case NOT_STARTED -> showOpenControl
+                    ? buildOpenEventForm(engine, coordinator, status.eventName(), fixedUsername, onSuccess)
                     // The Users tab deliberately has no Open control (scoped to the Events tab), so it just explains why.
                     : new VBox(Labels.wrapping("This event has not been opened yet — its market maker can open it from the Events tab."));
             case ACTIVE -> buildActiveControls(engine, coordinator, status, fixedUsername, onSuccess);
@@ -55,29 +64,42 @@ public final class EventActionsPanelBuilder {
             return new VBox(10,
                     OrderBookPanelBuilder.build(engine, coordinator, status, fixedUsername, onSuccess),
                     new Separator(),
-                    buildCloseEventForm(engine, coordinator, status.eventName(), status.optionOneName(), status.optionTwoName(), onSuccess));
+                    buildCloseEventForm(engine, coordinator, status.eventName(), status.optionOneName(), status.optionTwoName(), fixedUsername, onSuccess));
         }
         VBox participateForm = buildParticipateForm(engine, coordinator, status.eventName(),
                 status.optionOneName(), status.optionTwoName(), fixedUsername, onSuccess);
         return new VBox(10, participateForm, new Separator(),
-                buildCloseEventForm(engine, coordinator, status.eventName(), status.optionOneName(), status.optionTwoName(), onSuccess));
+                buildCloseEventForm(engine, coordinator, status.eventName(), status.optionOneName(), status.optionTwoName(), fixedUsername, onSuccess));
     }
 
-    // Builds the "close this event" control: a user picker (market maker only, but let the engine reject a wrong
-    // choice rather than pre-filtering the list -- same approach as buildOpenEventForm) plus a winning-option
-    // selector and the button.
+    // Builds the "close this event" control: a username source (a fixed Label if fixedUsername is given -- Exercise
+    // 3's client, always logged in as one real user -- otherwise a ComboBox populated from listUsers(), for the
+    // plain in-process launch's fallback; same pattern as buildParticipateForm/buildOpenEventForm) plus a
+    // winning-option selector and the button. Only the event's assigned market maker can succeed — the engine
+    // enforces that, so a picker (when shown at all) deliberately doesn't try to pre-filter the list to likely MMs.
     private static VBox buildCloseEventForm(IEngine engine, TabCoordinator coordinator, String eventName,
-                                            String optionOneName, String optionTwoName, Consumer<EventStatusDto> onSuccess) {
-        ComboBox<String> usernameComboBox = UsernamePicker.build(engine);
+                                            String optionOneName, String optionTwoName, String fixedUsername,
+                                            Consumer<EventStatusDto> onSuccess) {
+        Node usernameNode;
+        Supplier<String> usernameSupplier;
+        if (fixedUsername != null) {
+            usernameNode = new Label("Closing as: " + fixedUsername);
+            usernameSupplier = () -> fixedUsername;
+        } else {
+            ComboBox<String> usernameComboBox = UsernamePicker.build(engine);
+            usernameNode = usernameComboBox;
+            usernameSupplier = () -> usernameComboBox.getSelectionModel().getSelectedItem();
+        }
+
         ComboBox<String> winningOptionComboBox = new ComboBox<>();
         winningOptionComboBox.getItems().addAll(optionOneName, optionTwoName);
         winningOptionComboBox.getSelectionModel().selectFirst();
         Button closeButton = new Button("Close Event");
-        closeButton.setOnAction(event -> handleCloseEventClick(engine, coordinator, eventName, usernameComboBox,
+        closeButton.setOnAction(event -> handleCloseEventClick(engine, coordinator, eventName, usernameSupplier,
                 winningOptionComboBox, optionOneName, onSuccess, closeButton));
 
         return new VBox(6, Labels.sectionHeader("Close this event (market maker only):"),
-                new HBox(8, usernameComboBox, winningOptionComboBox, closeButton));
+                new HBox(8, usernameNode, winningOptionComboBox, closeButton));
     }
 
     // Closes the event via the existing IEngine.closeEvent, then redraws through the caller's own callback and
@@ -85,9 +107,9 @@ public final class EventActionsPanelBuilder {
     // on a background Task (gui.common.Async) since every IEngine call is a real network round-trip once this is
     // backed by HttpEngineClient; the button is disabled for the call's duration to prevent a double-submit.
     private static void handleCloseEventClick(IEngine engine, TabCoordinator coordinator, String eventName,
-                                              ComboBox<String> usernameComboBox, ComboBox<String> winningOptionComboBox,
+                                              Supplier<String> usernameSupplier, ComboBox<String> winningOptionComboBox,
                                               String optionOneName, Consumer<EventStatusDto> onSuccess, Button closeButton) {
-        String username = usernameComboBox.getSelectionModel().getSelectedItem();
+        String username = usernameSupplier.get();
         String winningOptionName = winningOptionComboBox.getSelectionModel().getSelectedItem();
         if (username == null || username.isBlank() || winningOptionName == null) {
             Dialogs.showError("Invalid input", "Select both the market maker and the winning option.");
@@ -108,24 +130,37 @@ public final class EventActionsPanelBuilder {
                 });
     }
 
-    // Builds the "open this event" control: a user picker plus the button. Only the event's assigned market maker can
-    // succeed — the engine enforces that, so this deliberately doesn't try to pre-filter the list to likely MMs.
+    // Builds the "open this event" control: a username source (a fixed Label if fixedUsername is given -- Exercise
+    // 3's client, always logged in as one real user -- otherwise a ComboBox populated from listUsers(), for the
+    // plain in-process launch's fallback; same pattern as buildParticipateForm) plus the button. Only the event's
+    // assigned market maker can succeed — the engine enforces that, so a picker (when shown at all) deliberately
+    // doesn't try to pre-filter the list to likely MMs.
     private static VBox buildOpenEventForm(IEngine engine, TabCoordinator coordinator, String eventName,
-                                           Consumer<EventStatusDto> onSuccess) {
-        ComboBox<String> usernameComboBox = UsernamePicker.build(engine);
+                                           String fixedUsername, Consumer<EventStatusDto> onSuccess) {
+        Node usernameNode;
+        Supplier<String> usernameSupplier;
+        if (fixedUsername != null) {
+            usernameNode = new Label("Opening as: " + fixedUsername);
+            usernameSupplier = () -> fixedUsername;
+        } else {
+            ComboBox<String> usernameComboBox = UsernamePicker.build(engine);
+            usernameNode = usernameComboBox;
+            usernameSupplier = () -> usernameComboBox.getSelectionModel().getSelectedItem();
+        }
+
         Button openButton = new Button("Open Event");
-        openButton.setOnAction(event -> handleOpenEventClick(engine, coordinator, eventName, usernameComboBox, onSuccess, openButton));
+        openButton.setOnAction(event -> handleOpenEventClick(engine, coordinator, eventName, usernameSupplier, onSuccess, openButton));
 
         return new VBox(6, Labels.sectionHeader("Open this event (market maker only):"),
-                new HBox(8, usernameComboBox, openButton));
+                new HBox(8, usernameNode, openButton));
     }
 
     // Opens the event via the existing IEngine.openEvent, then redraws through the caller's own callback and refreshes
     // both lists — opening moves money from the MM into the event account, so balances change. Runs on a background
     // Task -- see handleCloseEventClick's own note above.
     private static void handleOpenEventClick(IEngine engine, TabCoordinator coordinator, String eventName,
-                                             ComboBox<String> usernameComboBox, Consumer<EventStatusDto> onSuccess, Button openButton) {
-        String username = usernameComboBox.getSelectionModel().getSelectedItem();
+                                             Supplier<String> usernameSupplier, Consumer<EventStatusDto> onSuccess, Button openButton) {
+        String username = usernameSupplier.get();
         if (username == null || username.isBlank()) {
             Dialogs.showError("Invalid input", "Select the user opening this event.");
             return;

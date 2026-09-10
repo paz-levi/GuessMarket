@@ -146,8 +146,12 @@ public class EventsTabController {
         // The action control is driven by status: only ever show the one thing that can actually succeed right now.
         // fixedUsername is the real logged-in username under Exercise 3's client, or null under the plain in-process
         // launch (no login screen) -- EventActionsPanelBuilder falls back to a picker only in the null case.
+        // showOpenControl=true: the Events tab is always where a NOT_STARTED event's Open form lives, regardless of
+        // whether a session username is set -- kept as its own parameter, separate from fixedUsername, specifically
+        // so a real logged-in username here can never be mistaken for "we're on the Users tab" (see
+        // EventActionsPanelBuilder.build's own doc for the bug this fixes).
         eventDetailsBox.getChildren().add(
-                EventActionsPanelBuilder.build(engine, coordinator, status, username, this::renderEventDetails));
+                EventActionsPanelBuilder.build(engine, coordinator, status, username, true, this::renderEventDetails));
     }
 
     // Populates one filter ComboBox: null ("All") as the first item, then every value of the enum, rendered through
