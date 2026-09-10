@@ -1,0 +1,2 @@
+Main-Class: client.ClientApp
+Class-Path: engine.jar gui.jar gson-2.11.0.jar

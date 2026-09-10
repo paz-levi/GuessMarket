@@ -1,7 +1,5 @@
 package gui.tabs;
 
-import java.util.List;
-
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
 import javafx.scene.control.Label;
@@ -12,12 +10,11 @@ import javafx.scene.control.SplitPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 
-import dto.EventStatusDto;
 import dto.UserDetailDto;
 import dto.UserEventParticipationDto;
 import dto.UserSummaryDto;
 import engine.IEngine;
-import exception.GuessMarketException;
+import gui.common.Async;
 import gui.common.Dialogs;
 import gui.common.Formatters;
 import gui.common.Labels;
@@ -48,6 +45,10 @@ public class UsersTabController {
     private IEngine engine;
     private TabCoordinator coordinator;
 
+    // Null under the plain in-process launch (no login screen) -- see showUserEventDetails's own doc for what that
+    // means for the per-event action controls rendered below.
+    private String username;
+
     // Both injected by the hosting shell right after the FXML tree is built -- never during initialize(), which
     // runs before the shell has either of them. Nothing in initialize() touches the engine, so that ordering is safe.
     public void setEngine(IEngine engine) {
@@ -56,6 +57,12 @@ public class UsersTabController {
 
     public void setCoordinator(TabCoordinator coordinator) {
         this.coordinator = coordinator;
+    }
+
+    // Set by the hosting shell once a real logged-in username exists (Exercise 3's ClientApp only); left null under
+    // the plain in-process launch.
+    public void setUsername(String username) {
+        this.username = username;
     }
 
     // Wires this tab's list rendering and row selection; called automatically by FXMLLoader once all @FXML fields
@@ -86,44 +93,38 @@ public class UsersTabController {
     }
 
     // Re-reads the full user list from the engine and refreshes the list view; called right after a successful
-    // load, and whenever any action anywhere reports that user data changed (via the coordinator).
+    // load, and whenever any action anywhere reports that user data changed (via the coordinator). Every IEngine
+    // call is a real network round-trip once this is backed by HttpEngineClient, so it runs on a background Task --
+    // see gui.common.Async.
     public void refreshUsersList() {
-        try {
-            List<UserSummaryDto> users = engine.listUsers();
-            usersListView.getItems().setAll(users);
-        } catch (GuessMarketException e) {
-            // Not expected to be reachable right after a successful load, but handled defensively rather than assumed away.
-            Dialogs.showError("Could not list users", e);
-        }
+        Async.run(engine::listUsers,
+                users -> usersListView.getItems().setAll(users),
+                failure -> Dialogs.showError("Could not list users", failure));
     }
 
-    // Looks up one user's full detail view and renders it in the right-hand details panel; called whenever the Users list selection changes.
-    private void showUserDetails(String username) {
-        try {
-            UserDetailDto detail = engine.getUser(username);
-            renderUserDetails(detail, null);
-        } catch (GuessMarketException e) {
-            Dialogs.showError("Could not load user details", e);
-        }
+    // Looks up one user's full detail view and renders it in the right-hand details panel; called whenever the
+    // Users list selection changes. Runs on a background Task -- see refreshUsersList's own note above.
+    private void showUserDetails(String selectedUsername) {
+        Async.run(() -> engine.getUser(selectedUsername),
+                detail -> renderUserDetails(detail, null),
+                failure -> Dialogs.showError("Could not load user details", failure));
     }
 
-    // Re-fetches username's full detail view after a purchase made from their own tab, then rebuilds all three sections
-    // fresh (the balance badge and that event's participation entry both changed, not just the sub-panel being viewed),
-    // re-selecting eventIdToReselect afterward so the user doesn't lose their place.
-    private void refreshUserDetailsAfterPurchase(String username, int eventIdToReselect) {
-        try {
-            UserDetailDto detail = engine.getUser(username);
-            renderUserDetails(detail, eventIdToReselect);
-        } catch (GuessMarketException e) {
-            Dialogs.showError("Could not load user details", e);
-        }
+    // Re-fetches viewedUsername's full detail view after a purchase made from their own tab, then rebuilds all three
+    // sections fresh (the balance badge and that event's participation entry both changed, not just the sub-panel
+    // being viewed), re-selecting eventNameToReselect afterward so the user doesn't lose their place. Runs on a
+    // background Task -- see refreshUsersList's own note above.
+    private void refreshUserDetailsAfterPurchase(String viewedUsername, String eventNameToReselect) {
+        Async.run(() -> engine.getUser(viewedUsername),
+                detail -> renderUserDetails(detail, eventNameToReselect),
+                failure -> Dialogs.showError("Could not load user details", failure));
     }
 
     // Rebuilds the details panel from scratch: the account-balance badge, the balance-history chart, the
     // events-participation list, and a per-event sub-panel (details + action controls) driven by whichever
-    // participation gets selected. If eventIdToReselect is non-null, that participation is re-selected
+    // participation gets selected. If eventNameToReselect is non-null, that participation is re-selected
     // programmatically after rebuilding the list.
-    private void renderUserDetails(UserDetailDto detail, Integer eventIdToReselect) {
+    private void renderUserDetails(UserDetailDto detail, String eventNameToReselect) {
         Label balanceLabel = Labels.wrapping("Balance: " + Formatters.dollars(detail.balance())
                 + (detail.blocked() ? "  (BLOCKED)" : ""));
         balanceLabel.getStyleClass().add("balance-badge");
@@ -144,7 +145,7 @@ public class UsersTabController {
         });
         participationListView.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> {
             if (newSelection != null) {
-                showUserEventDetails(newSelection.eventId(), singleEventDetailsBox, detail.username());
+                showUserEventDetails(newSelection.eventName(), singleEventDetailsBox, detail.username());
             }
         });
 
@@ -158,9 +159,9 @@ public class UsersTabController {
                 singleEventDetailsBox
         );
 
-        if (eventIdToReselect != null) {
+        if (eventNameToReselect != null) {
             for (UserEventParticipationDto participation : participationListView.getItems()) {
-                if (participation.eventId() == eventIdToReselect) {
+                if (participation.eventName().equals(eventNameToReselect)) {
                     participationListView.getSelectionModel().select(participation);
                     break;
                 }
@@ -168,19 +169,25 @@ public class UsersTabController {
         }
     }
 
-    // Looks up one event's full status and renders it (details + action controls, pre-bound to username) in the given
-    // container; called whenever the events-participation list selection changes.
-    private void showUserEventDetails(int eventId, VBox container, String username) {
-        try {
-            EventStatusDto status = engine.getEventStatus(eventId);
-            container.getChildren().clear();
-            EventStatusPanelBuilder.append(container, status);
-            container.getChildren().add(new Separator());
-            // Same status gating as the Events tab: never show a control that can only fail.
-            container.getChildren().add(EventActionsPanelBuilder.build(engine, coordinator, status, username,
-                    newStatus -> refreshUserDetailsAfterPurchase(username, eventId)));
-        } catch (GuessMarketException e) {
-            Dialogs.showError("Could not load event details", e);
-        }
+    // Looks up one event's full status and renders it (details + action controls) in the given container; called
+    // whenever the events-participation list selection changes. Runs on a background Task -- see refreshUsersList's
+    // own note above. viewedUsername is whichever user's page this participation was selected on (Ex2's own
+    // impersonation model: act as whoever's page you're viewing) -- but under Exercise 3's client, every action
+    // always executes as the actual logged-in session user regardless of what username a request carries (the
+    // server derives identity from the session, never from a field), so the action panel below is bound to the
+    // real session username (this.username) whenever one exists, falling back to viewedUsername only under the
+    // plain in-process launch, which has no session concept to prefer instead.
+    private void showUserEventDetails(String eventName, VBox container, String viewedUsername) {
+        Async.run(() -> engine.getEventStatus(eventName),
+                status -> {
+                    String actingUsername = username != null ? username : viewedUsername;
+                    container.getChildren().clear();
+                    EventStatusPanelBuilder.append(container, status);
+                    container.getChildren().add(new Separator());
+                    // Same status gating as the Events tab: never show a control that can only fail.
+                    container.getChildren().add(EventActionsPanelBuilder.build(engine, coordinator, status, actingUsername,
+                            newStatus -> refreshUserDetailsAfterPurchase(viewedUsername, eventName)));
+                },
+                failure -> Dialogs.showError("Could not load event details", failure));
     }
 }

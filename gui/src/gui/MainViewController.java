@@ -12,6 +12,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.Window;
 
 import engine.IEngine;
+import exception.UserAlreadyExistsException;
 import gui.common.Dialogs;
 import gui.tabs.EventsTabController;
 import gui.tabs.TabCoordinator;
@@ -28,6 +29,13 @@ import gui.tabs.UsersTabController;
 public class MainViewController implements TabCoordinator {
 
     private static final int ARTIFICIAL_DELAY_MS = 1500;
+
+    // Ex1/Ex2's plain IEngine.createDefault() launch (GuessMarketApp, run.bat) has no login screen at all -- Stage 1
+    // already made IEngine.loadEventsFile(path, uploaderUsername) require a real, registered uploader identity, so
+    // this stands in for "who's uploading" when nobody ever called setUsername(String) (i.e. we're not running under
+    // Exercise 3's client, which always sets a real logged-in username right after login). Registered lazily, once,
+    // the first time a load actually happens without a real session -- never used when username is non-null.
+    private static final String IN_PROCESS_PLACEHOLDER_USERNAME = "gui-local-user";
 
     @FXML
     private Button loadFileButton;
@@ -51,14 +59,28 @@ public class MainViewController implements TabCoordinator {
 
     private IEngine engine;
 
-    // Injected once by GuessMarketApp right after loading the FXML; the same engine instance is reused for every
-    // load, never re-created. Both sub-controllers are already constructed and initialized by this point (nested
-    // <fx:include> controllers are built before the including controller's own initialize() runs), so this is the
-    // right place to hand the engine down to them.
+    // Null under the plain in-process launch (GuessMarketApp/run.bat, no login screen). Set once by Exercise 3's
+    // ClientApp right after a successful login, before this shell is even shown -- see setUsername below.
+    private String username;
+
+    // Injected once by GuessMarketApp/ClientApp right after loading the FXML; the same engine instance is reused for
+    // every load, never re-created. Both sub-controllers are already constructed and initialized by this point
+    // (nested <fx:include> controllers are built before the including controller's own initialize() runs), so this
+    // is the right place to hand the engine down to them.
     public void setEngine(IEngine engine) {
         this.engine = engine;
         eventsTabController.setEngine(engine);
         usersTabController.setEngine(engine);
+    }
+
+    // Set once by Exercise 3's ClientApp right after login, with the session's own username -- threaded down to
+    // both tabs so every action control acts as the logged-in user rather than needing a picker. Never called by
+    // the plain in-process launch, which has no session/login concept at all; both tabs treat a null username
+    // exactly as they already did before this method existed (see EventsTabController/UsersTabController).
+    public void setUsername(String username) {
+        this.username = username;
+        eventsTabController.setUsername(username);
+        usersTabController.setUsername(username);
     }
 
     // Wires the header's controls and hands each tab its coordinator; called automatically by FXMLLoader once all
@@ -123,14 +145,24 @@ public class MainViewController implements TabCoordinator {
         runLoad(selectedFile);
     }
 
-    // Runs IEngine.loadEventsFile off the FX thread, showing the progress indicator for the duration (plus a short artificial delay).
+    // Runs IEngine.loadEventsFile off the FX thread, showing the progress indicator for the duration (plus a short
+    // artificial delay). uploaderUsername is the real logged-in user under Exercise 3's client, or a lazily
+    // self-registered placeholder under the plain in-process launch, which has no login screen to get a real one from.
     private void runLoad(File file) {
         String path = file.getAbsolutePath();
+        String uploaderUsername = username != null ? username : IN_PROCESS_PLACEHOLDER_USERNAME;
         Task<Void> loadTask = new Task<>() {
             @Override
             protected Void call() throws Exception {
+                if (username == null) {
+                    try {
+                        engine.registerUser(uploaderUsername);
+                    } catch (UserAlreadyExistsException e) {
+                        // Already registered by an earlier load in this same in-process run -- fine, reuse it.
+                    }
+                }
                 Thread.sleep(ARTIFICIAL_DELAY_MS);
-                engine.loadEventsFile(path);
+                engine.loadEventsFile(path, uploaderUsername);
                 return null;
             }
         };

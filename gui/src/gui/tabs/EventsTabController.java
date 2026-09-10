@@ -1,6 +1,5 @@
 package gui.tabs;
 
-import java.util.List;
 import java.util.function.Function;
 
 import javafx.fxml.FXML;
@@ -20,10 +19,9 @@ import dto.EventStatusDto;
 import dto.EventSummaryDto;
 import dto.TradingMethod;
 import engine.IEngine;
-import exception.GuessMarketException;
+import gui.common.Async;
 import gui.common.Dialogs;
 import gui.common.Formatters;
-import gui.components.CreateEventDialogBuilder;
 import gui.components.EventActionsPanelBuilder;
 import gui.components.EventStatusPanelBuilder;
 
@@ -49,9 +47,6 @@ public class EventsTabController {
     private ComboBox<CommissionMode> commissionFilterComboBox;
 
     @FXML
-    private javafx.scene.control.Button createEventButton;
-
-    @FXML
     private ListView<EventSummaryDto> eventsListView;
 
     @FXML
@@ -59,6 +54,10 @@ public class EventsTabController {
 
     private IEngine engine;
     private TabCoordinator coordinator;
+
+    // Null under the plain in-process launch (no login screen) -- see EventActionsPanelBuilder.build's own
+    // fixedUsername doc for what that means for the action controls rendered below.
+    private String username;
 
     // Both injected by the hosting shell right after the FXML tree is built -- never during initialize(), which
     // runs before the shell has either of them. Nothing in initialize() touches the engine, so that ordering is safe.
@@ -70,12 +69,16 @@ public class EventsTabController {
         this.coordinator = coordinator;
     }
 
-    // Wires this tab's list rendering, row selection, filters, and the Create Event button; called automatically by
-    // FXMLLoader once all @FXML fields are injected.
+    // Set by the hosting shell once a real logged-in username exists (Exercise 3's ClientApp only); left null under
+    // the plain in-process launch.
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    // Wires this tab's list rendering, row selection, and filters; called automatically by FXMLLoader once all
+    // @FXML fields are injected.
     @FXML
     private void initialize() {
-        createEventButton.setOnAction(event -> handleCreateEventClick());
-
         eventsListView.setCellFactory(list -> new ListCell<>() {
             @Override
             protected void updateItem(EventSummaryDto event, boolean empty) {
@@ -85,7 +88,7 @@ public class EventsTabController {
         });
         eventsListView.getSelectionModel().selectedItemProperty().addListener((observable, oldSelection, newSelection) -> {
             if (newSelection != null) {
-                showEventDetails(newSelection.eventId());
+                showEventDetails(newSelection.eventName());
             }
         });
 
@@ -114,35 +117,25 @@ public class EventsTabController {
 
     // Re-reads the event list from the engine, filtered by the three filter ComboBoxes' current selections, and
     // refreshes the list view; called right after a successful load, whenever a filter selection changes, and
-    // whenever any action anywhere reports that event data changed (via the coordinator).
+    // whenever any action anywhere reports that event data changed (via the coordinator). Every IEngine call is a
+    // real network round-trip once this is backed by HttpEngineClient, so it runs on a background Task -- see
+    // gui.common.Async.
     public void refreshEventsList() {
-        try {
-            EventFilterDto filter = new EventFilterDto(
-                    methodFilterComboBox.getSelectionModel().getSelectedItem(),
-                    statusFilterComboBox.getSelectionModel().getSelectedItem(),
-                    commissionFilterComboBox.getSelectionModel().getSelectedItem());
-            List<EventSummaryDto> events = engine.listEvents(filter);
-            eventsListView.getItems().setAll(events);
-        } catch (GuessMarketException e) {
-            // Not expected to be reachable right after a successful load, but handled defensively rather than assumed away.
-            Dialogs.showError("Could not list events", e);
-        }
+        EventFilterDto filter = new EventFilterDto(
+                methodFilterComboBox.getSelectionModel().getSelectedItem(),
+                statusFilterComboBox.getSelectionModel().getSelectedItem(),
+                commissionFilterComboBox.getSelectionModel().getSelectedItem());
+        Async.run(() -> engine.listEvents(filter),
+                events -> eventsListView.getItems().setAll(events),
+                failure -> Dialogs.showError("Could not list events", failure));
     }
 
-    // Opens the "Create Event" dialog. On success it already refreshes the events list itself (through the
-    // coordinator), so this only needs to show the newly created event's details afterward.
-    private void handleCreateEventClick() {
-        CreateEventDialogBuilder.show(engine, coordinator, status -> showEventDetails(status.eventId()));
-    }
-
-    // Looks up one event's full status and renders it in the right-hand details panel; called whenever the Events list selection changes.
-    private void showEventDetails(int eventId) {
-        try {
-            EventStatusDto status = engine.getEventStatus(eventId);
-            renderEventDetails(status);
-        } catch (GuessMarketException e) {
-            Dialogs.showError("Could not load event details", e);
-        }
+    // Looks up one event's full status and renders it in the right-hand details panel; called whenever the Events
+    // list selection changes. Runs on a background Task -- see refreshEventsList's own note above.
+    private void showEventDetails(String eventName) {
+        Async.run(() -> engine.getEventStatus(eventName),
+                this::renderEventDetails,
+                failure -> Dialogs.showError("Could not load event details", failure));
     }
 
     // Rebuilds the details panel's content from scratch: the read-only status display plus the action controls.
@@ -151,9 +144,10 @@ public class EventsTabController {
         EventStatusPanelBuilder.append(eventDetailsBox, status);
         eventDetailsBox.getChildren().add(new Separator());
         // The action control is driven by status: only ever show the one thing that can actually succeed right now.
-        // fixedUsername is null here -- the Events tab has no already-selected user, so its forms need a picker.
+        // fixedUsername is the real logged-in username under Exercise 3's client, or null under the plain in-process
+        // launch (no login screen) -- EventActionsPanelBuilder falls back to a picker only in the null case.
         eventDetailsBox.getChildren().add(
-                EventActionsPanelBuilder.build(engine, coordinator, status, null, this::renderEventDetails));
+                EventActionsPanelBuilder.build(engine, coordinator, status, username, this::renderEventDetails));
     }
 
     // Populates one filter ComboBox: null ("All") as the first item, then every value of the enum, rendered through

@@ -16,12 +16,11 @@ import javafx.scene.layout.VBox;
 import dto.EventStatusDto;
 import dto.OrderBookSnapshotDto;
 import dto.OrderDto;
-import dto.OrderResultDto;
 import dto.OrderSide;
 import dto.ParticipantDto;
 import dto.SubmitOrderRequestDto;
 import engine.IEngine;
-import exception.GuessMarketException;
+import gui.common.Async;
 import gui.common.Dialogs;
 import gui.common.Formatters;
 import gui.common.Labels;
@@ -146,8 +145,8 @@ public final class OrderBookPanelBuilder {
         priceField.setPrefColumnCount(6);
 
         Button submitButton = new Button("Submit Order");
-        submitButton.setOnAction(event -> handleSubmitOrderClick(engine, coordinator, status.eventId(), usernameSupplier,
-                sideComboBox, optionComboBox, quantityField, priceField, onSuccess));
+        submitButton.setOnAction(event -> handleSubmitOrderClick(engine, coordinator, status.eventName(), usernameSupplier,
+                sideComboBox, optionComboBox, quantityField, priceField, onSuccess, submitButton));
 
         return new VBox(6, Labels.sectionHeader("Submit order:"),
                 new HBox(8, usernameNode, sideComboBox, optionComboBox, quantityField, priceField, submitButton));
@@ -156,10 +155,10 @@ public final class OrderBookPanelBuilder {
     // Reads the form's fields exactly as entered; the only ui-level checks are "is something selected" and "does
     // this parse as a number" -- every business rule (price ceiling, non-positive quantity, selling unheld shares,
     // a blocked user) is already enforced server-side by IEngine.submitOrder, so none of it is duplicated here.
-    private static void handleSubmitOrderClick(IEngine engine, TabCoordinator coordinator, int eventId,
+    private static void handleSubmitOrderClick(IEngine engine, TabCoordinator coordinator, String eventName,
                                                Supplier<String> usernameSupplier, ComboBox<OrderSide> sideComboBox,
                                                ComboBox<String> optionComboBox, TextField quantityField,
-                                               TextField priceField, Consumer<EventStatusDto> onSuccess) {
+                                               TextField priceField, Consumer<EventStatusDto> onSuccess, Button submitButton) {
         String username = usernameSupplier.get();
         if (username == null || username.isBlank()) {
             Dialogs.showError("Invalid input", "Select a user to trade as.");
@@ -185,8 +184,8 @@ public final class OrderBookPanelBuilder {
             return;
         }
 
-        SubmitOrderRequestDto request = new SubmitOrderRequestDto(username, eventId, optionNumber, side, quantity, price);
-        submitOrder(engine, coordinator, request, onSuccess);
+        SubmitOrderRequestDto request = new SubmitOrderRequestDto(username, eventName, optionNumber, side, quantity, price);
+        submitOrder(engine, coordinator, request, onSuccess, submitButton);
     }
 
     // Mirrors OrderBookExecutor.roundToCents's own convention -- that one is engine-private and unreachable from
@@ -198,17 +197,23 @@ public final class OrderBookPanelBuilder {
     // Submits the order via the existing IEngine.submitOrder, then lets the caller redraw itself (onSuccess) from
     // the result's own nested eventStatus() -- no second getEventStatus call -- and refreshes both lists, matching
     // every other trading action: a fill moves money between a buyer and seller, so both the events and the users
-    // lists can go stale otherwise.
+    // lists can go stale otherwise. Runs on a background Task (gui.common.Async) since every IEngine call is a real
+    // network round-trip once this is backed by HttpEngineClient; the button is disabled for the call's duration to
+    // prevent a double-submit.
     private static void submitOrder(IEngine engine, TabCoordinator coordinator, SubmitOrderRequestDto request,
-                                    Consumer<EventStatusDto> onSuccess) {
-        try {
-            OrderResultDto result = engine.submitOrder(request);
-            Dialogs.showOrderConfirmation(result);
-            onSuccess.accept(result.eventStatus());
-            coordinator.refreshEvents();
-            coordinator.refreshUsers();
-        } catch (GuessMarketException e) {
-            Dialogs.showError("Could not submit order", e);
-        }
+                                    Consumer<EventStatusDto> onSuccess, Button submitButton) {
+        submitButton.setDisable(true);
+        Async.run(() -> engine.submitOrder(request),
+                result -> {
+                    submitButton.setDisable(false);
+                    Dialogs.showOrderConfirmation(result);
+                    onSuccess.accept(result.eventStatus());
+                    coordinator.refreshEvents();
+                    coordinator.refreshUsers();
+                },
+                failure -> {
+                    submitButton.setDisable(false);
+                    Dialogs.showError("Could not submit order", failure);
+                });
     }
 }

@@ -6,6 +6,72 @@ scannable in seconds.
 
 ---
 
+### `7cc1e59` — 2026-09-09 — Ex3 Stage 2: servlets + WAR, EngineImpl concurrency, session identity, no-disk-write uploads (92/92 tests)
+New `server` module producing exactly one WAR (`dist/GuessMarket.war`, `/GuessMarket`), one
+servlet per `IEngine` capability, deployed and verified against a real Tomcat 11.0.25. Three real
+design decisions, each with its own verification, not just asserted.
+
+**Concurrency: one coarse `ReentrantReadWriteLock` on `EngineImpl`, not a concurrent collection or
+fine-grained locks.** Tomcat serves concurrent requests on separate threads, and `EngineImpl`'s
+two `LinkedHashMap`s (plus every domain object hanging off their values — `User` balances/
+ledgers, `Event` trade histories, `OptionBook` order lists) were plain, unsynchronized mutable
+state. A `ConcurrentHashMap` was rejected as **insufficient, not just unnecessary**: the real
+races are check-then-act sequences (`registerUser`'s `containsKey`→`put`, `loadEventsFile`'s
+already-atomic two-pass name check) and mutation of map *values*, not map structure — a
+concurrent map fixes none of that, and would silently drop `LinkedHashMap`'s insertion order,
+which is directly user-visible as list ordering. Fine-grained per-entity locking was rejected as
+real deadlock surface for no measurable gain at this scale: one order fill already touches two
+`User`s, one `Event`, and one `OptionBook` at once, and `closeEvent` fans out over every user in
+the system. Read/write over a single mutex specifically because polling makes reads the dominant
+traffic once clients hit `/events`/`/users` on a timer. **Deadlock-safety proved, not asserted:**
+a `ReentrantReadWriteLock` only deadlocks if a thread holding the read lock tries to upgrade to
+the write lock, which requires one public method to call another public method while a lock is
+held. Every one of `EngineImpl`'s 15 `@Override public` methods was read and its helper calls
+traced — all resolve to private/static helpers on the class itself, direct map access, or
+external static classes (`EventsFileLoader`, `TradeExecutor`, `OrderBookExecutor`,
+`StateFileManager`, `LmsrMath`); zero cross-calls between public methods, confirmed by grep
+(no `methodName(` call site for any of the 15 names other than their own declaration). New
+`EngineConcurrencyTest` (4 tests: same-name registration race resolves to exactly one winner,
+20 distinct concurrent registrations all land, 20 concurrent deposits to one account sum exactly
+with a gap-free 1..20 ledger, 2 concurrent uploads of distinct files both land completely) —
+engine now **92/92** (was 88), nothing deleted or weakened.
+
+**Identity: HTTP session, never a request parameter, for every write endpoint.** Matches the
+lecture's `LoginServlet`/`SendChatServlet` pattern. A single `POST /login` registers the name
+**and** creates the session in one call — no separate `/register`, since Ex3 has no persistence
+and therefore no "returning user" concept to distinguish from a first-time one; a name collision
+is always a genuine duplicate. `SessionUtils.login` invalidates any pre-existing session before
+creating the new one, so a fresh login can never inherit another identity's leftover state. Every
+write-capable servlet (`deposit`, `events/upload`, `events/open`, `events/participate`,
+`events/order`, `events/close`) resolves the acting username via
+`SessionUtils.requireLoggedInUsername` — thrown as `NotLoggedInException` (mapped to 401) before
+the engine is ever called — never from a client-supplied parameter; `IEngine`'s own `username`
+parameters are unchanged and still the engine's own authorization contract.
+
+**Upload never touches disk.** `@MultipartConfig(fileSizeThreshold = 20MB, maxFileSize = 20MB,
+maxRequestSize = 25MB)` — setting the in-memory threshold at or above the max accepted file size
+means Tomcat's multipart parser never spills the part to its own temp directory. `EventsFileLoader`
+gained an `InputStream` overload (`EngineImpl`/`IEngine` too) sitting alongside the existing
+`String filePath` one, so `UploadEventsFileServlet` reads `part.getInputStream()` straight into
+the engine with no `File` ever constructed. Verified empirically after every upload in this
+stage's test passes: Tomcat's `work`/`temp` dirs checked, no upload artifacts present.
+
+**Verification Stage 1's own single-threaded tests structurally could not perform:** a PowerShell
+`RunspacePool` firing genuinely parallel requests (not a sequential loop) against the live,
+running server — 20 concurrent same-name logins → exactly one 200 and nineteen 409s; 20 distinct
+concurrent logins → all 20 land; 20 concurrent deposits to one account → exact sum, gap-free
+ledger; 2 concurrent distinct-file uploads → both land, neither lost nor duplicated. This is the
+one thing no amount of in-process JUnit concurrency testing proves on its own — that the lock
+holds under real Tomcat request threads, not just JVM-internal ones. Also verified: a Postman
+collection (29 requests/52 assertions via `newman`) covering all 13 servlets and every documented
+error mapping (400/401/403/404/409), a clean WAR deploy with zero `SEVERE` log lines, and `gui`/
+`ui` confirmed untouched (`git status` clean, `ui` still fails to compile in exactly Stage 1's
+documented shape). One real bug caught along the way: the first `web.xml` draft used a literal
+`--` inside an XML comment (illegal per the XML spec), which broke deployment outright — fixed by
+rewording, not by suppressing the check. `gson-2.11.0.jar` (2.10+ is where native `record`
+deserialization landed) downloaded and committed to `lib/`, following the existing
+`junit-platform-console-standalone`/`javafx-sdk` precedent.
+
 ### `5c89c3a` — 2026-09-09 — Ex3 Stage 1: event identity id->name, accumulating file loads, user registration/deposits, per-user transaction ledger (88/88 tests)
 Engine only — no HTTP, no servlets, no new modules; those need Tomcat set up first and this stage
 is fully independent of them. Three blockers to the client-server split, all independent of
