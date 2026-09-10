@@ -10,7 +10,7 @@
 
 <!-- Exercise 3's login screen, shown before the main shell. See client.LoginController for the POST /login flow
      and the inline-retry behavior on a duplicate name (409). A plain VBox centered on a StackPane, not a full
-     BorderPane shell -- this screen is replaced wholesale once login succeeds, not resized/reused afterward. -->
+     BorderPane shell; this screen is replaced wholesale once login succeeds, not resized/reused afterward. -->
 <StackPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
            fx:controller="client.LoginController">
     <VBox spacing="14" alignment="CENTER" maxWidth="360" maxHeight="-Infinity">

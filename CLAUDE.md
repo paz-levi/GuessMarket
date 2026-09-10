@@ -316,6 +316,18 @@ Mermaid diagram at the top current.
 Every non-trivial method gets one short plain-language comment line directly above it — same
 bar already applied throughout the existing code.
 
+**XML/FXML comment safety — a recurring, mechanically preventable mistake, now standing
+policy.** This project's own comment style freely uses `--` as a plain-English em-dash
+substitute inside `//`/`rem` comments — safe there, but a literal `--` inside an XML
+`<!-- ... -->` comment is illegal per the XML spec and breaks the parser outright, not a lint
+warning. This exact mistake has broken a build **three times** now (the pre-Ex3 `gui.tabs`
+refactor's `EventsTab.fxml`/`UsersTab.fxml`, Stage 2's `web.xml`, Stage 3's `LoginView.fxml`) —
+always caught late, at actual XML-parse time, since `build.bat` never parses FXML/XML content,
+only compiles `.java`. **Standing rule:** inside any `<!-- ... -->` comment (`.fxml`, `.xml`,
+`web.xml`, or any other XML-syntax file), use a single `-` or a full word (`and`, `but`,
+`since`) instead of `--` — check new/edited XML-family comments for a stray `--` before
+considering the file done, rather than relying on it surfacing at runtime.
+
 ### Log — `PROGRESS_LOG.md`
 **After every commit, append one entry** — commit hash, date, 2-4 terse sentences on what
 changed, why, and which spec/CLAUDE.md rule it satisfies. Newest entry at the top. This is

@@ -6,6 +6,87 @@ scannable in seconds.
 
 ---
 
+### `26e2993` — 2026-09-10 — Ex3 Stage 3: HTTP-backed JavaFX client, login screen, gui's Stage 1 breakage fixed (92/92 tests unaffected)
+
+New `client` module: a login screen plus `HttpEngineClient implements IEngine`, the first
+HTTP-backed engine. `IEngine`'s own contract stays fully synchronous by design —
+`HttpEngineClient` uses blocking `HttpClient.send()`, never `sendAsync()` — so it drops straight
+into `setEngine(IEngine)` with zero interface changes; the async boundary lives entirely in
+`gui`'s own call sites instead.
+
+**Session: one `HttpClient` + one `CookieManager` per client process, for its whole lifetime.**
+`HttpClient.newBuilder().cookieHandler(new CookieManager(null, CookiePolicy.ACCEPT_ALL))` — set
+once in `HttpEngineClient`'s constructor and reused for every call, which is what makes
+`POST /login`'s session cookie automatically ride on every later request, exactly mirroring
+Postman's own shared cookie jar (`server/postman/GuessMarket.postman_collection.json`'s own
+description). No bearer token, no custom header, no cookie ever read/written by hand. Verified
+for real: two independent `HttpEngineClient` instances (one MM, one buyer) in an end-to-end
+smoke test against the live Stage 2 server never leaked identity into each other.
+
+**`gui.common.Async.run(Callable, Consumer<T>, Consumer<Throwable>)` — one helper, every
+`IEngine` call site.** Every method is a real network round-trip once backed by
+`HttpEngineClient`, so none can run synchronously on the FX Application Thread any more. Wraps
+the exact `Task` shape `MainViewController.runLoad` already used (`setOnSucceeded`/`setOnFailed`
+dispatch back to the FX thread automatically, no manual `Platform.runLater`) as a static utility,
+since callers are a mix of controller instances and static builder methods with no controller
+reference at all. Fixed 13 real call sites total (`gui` had been fully non-compiling since Stage
+1's `int eventId → String eventName` migration, never ported): `MainViewController.runLoad` (2,
+inside its own pre-existing `Task`), `EventsTabController` (2), `UsersTabController` (4),
+`EventActionsPanelBuilder` (3), `OrderBookPanelBuilder` (1), `UsernamePicker` (1) — all
+`Async.run`-wrapped, confirmed by grep with zero remaining synchronous calls.
+
+**Exception reconstruction — the exact inverse of `ServletUtils.writeError`'s own switch.** Every
+error body is `{"error": "<simple class name>", "message": "..."}`;
+`HttpEngineClient.reconstructException` maps each of the 11 real `GuessMarketException`
+subclasses back from its name (all have a single `(String message)` constructor, trivial to
+reconstruct), falling back to a new client-local `HttpClientException` for the two synthetic
+server-only names (`"BadRequest"`, `"NotLoggedIn"`) with no engine-side equivalent. Verified for
+real against the live server: an intentionally-duplicate registration in the smoke test
+round-tripped through a genuine HTTP 409 and came back out as an actual, catchable
+`UserAlreadyExistsException` carrying the server's own message text.
+
+Every method whose `IEngine` signature carries a `username`/`uploaderUsername` parameter
+(`participateInEvent`, `closeEvent`, `openEvent`, `depositFunds`, `submitOrder`, both
+`loadEventsFile` overloads) accepts it for the interface's transport-agnostic contract but never
+places it on the wire — every matching servlet derives the acting identity from the session
+cookie alone (`SessionUtils.requireLoggedInUsername`), never a request parameter. Each such
+method carries its own one-line comment saying so explicitly, not just the class-level doc,
+added after review flagged the unused-looking parameter as an easy target for a future reader to
+mistake for a bug.
+
+**Two deliberate deviations from the approved plan, both scoped to the legacy in-process path
+only:** `UsernamePicker` kept (plan said delete it) — `EventsTabController` always passed
+`fixedUsername=null` there even in Ex2, so deleting it would have broken `run.bat`'s own
+Events-tab trading entirely, not just the Create Event bonus. It's reached only when no session
+username was ever set (`MainViewController.setUsername`, called only by `ClientApp` after
+login) — never under the real HTTP client; made async too (`Async.run`), so it's not even a
+theoretical FX-thread risk. Separately, `MainViewController.runLoad` gained a lazy
+`gui-local-user` self-registration, guarded by `username == null` — Stage 1 already made
+`loadEventsFile` require a real registered uploader, and `run.bat`'s `GuessMarketApp` has no
+login screen at all; without this its file-load would throw `UserNotFoundException` on every
+attempt. Never triggers under `ClientApp`, which always has a real session username by the time
+the main shell is shown.
+
+`CreateEventDialogBuilder`/its Create Event button deleted outright (no `/events/create` servlet
+exists — Ex3 events come only from uploaded files).
+
+**`build.bat` restructured** so `ui`'s pre-existing, permanent breakage (Stage 1's
+`eventId→eventName` migration, never ported) no longer blocks `engine`/`gui`/`client` from
+building at all — previously the whole script died at the `ui` step and produced zero jars, not
+even `engine.jar`. `ui` is now attempted, warned-and-skipped on failure, non-fatal;
+`engine`/`gui`/`client` are each still fatal-on-failure and package independently. New
+`run-client.bat`; `.idea/modules.xml` gained `client` and the previously-unregistered `server`.
+
+**Verification:** `engine` untouched, 92/92 tests unaffected. Real end-to-end run against the
+actual running Stage 2 server, driving the real `HttpEngineClient` class (not a mock):
+register/login → deposit → multipart upload → open LMSR → open Order Book → separate buyer
+session → LMSR participate → Order Book order (rested, correctly unmatched) → `getEventStatus`/
+`getUser` → close → duplicate-name rejection — passed twice, cross-checked against raw `curl`
+output matching exactly. `run.bat` (in-process, `EngineImpl`) confirmed still launching and
+staying up, unaffected by any of the `gui` fixes. `run-client.bat`'s own GUI visual/click-through
+correctness was not verified this pass (host system memory pressure from unrelated running
+apps) — flagged for hands-on check.
+
 ### `7cc1e59` — 2026-09-09 — Ex3 Stage 2: servlets + WAR, EngineImpl concurrency, session identity, no-disk-write uploads (92/92 tests)
 New `server` module producing exactly one WAR (`dist/GuessMarket.war`, `/GuessMarket`), one
 servlet per `IEngine` capability, deployed and verified against a real Tomcat 11.0.25. Three real
