@@ -6,6 +6,82 @@ scannable in seconds.
 
 ---
 
+### `dac8d54` — 2026-09-10 — Ex3 Stage 4: deposit funds, transaction ledger, real 1s periodic polling; fix Users/Events tabs hidden behind Ex2-era load-a-file gate (92/92 engine tests unaffected)
+
+Wires up the last of Stage 3's deferred scope: `HttpEngineClient.depositFunds` (built in Stage
+3, never called from any screen) and the `/user/ledger` delta-polling endpoint (built in
+Stage 1/2, never reached from the client at all) both get real UI, and the client gets genuine
+background sync instead of only on-demand refresh. `engine`/`server` untouched throughout.
+
+**Deposit control — the design-correctness point resolved up front, then manually verified.**
+The server always deposits into the SESSION user, never a client-supplied one
+(`DepositServlet`'s own comment: "nobody can deposit into someone else's account by supplying a
+different username") — so a Deposit control on another user's page would silently deposit into
+your own account while appearing to target theirs. Gated by a single new
+`UsersTabController.viewingOwnAccount` boolean (`username != null && username.equals(detail.username())`),
+computed once per render and reused for both the deposit form and the ledger-polling gate —
+confirmed by grep that `buildDepositForm` has exactly one call site, inside that one `if`.
+Manually verified end-to-end, not just asserted: on the client, the deposit form and ledger both
+appear only on the logged-in user's own row and are genuinely absent on every other user's row;
+under the plain in-process launch (`username` always null) neither ever appears at all.
+
+**Ledger: delta-polled, kept in ASCENDING order client-side — a deliberate, disclosed UX choice.**
+New `HttpEngineClient.getLedgerDelta(int since)` — the first client-only method on that class
+(no `IEngine` equivalent exists; `LedgerDeltaDto` is servlet-only, built by slicing
+`UserDetailDto.transactions()` server-side). Initial population reverses `detail.transactions()`
+(newest-first, its own documented convention) once per render; every later delta batch
+(`entries()`, already ascending) is appended with zero re-sort. This is a considered departure
+from this app's other newest-first tables — confirmed on record as a conscious choice, not an
+implementation shortcut, matching `docs-reference/ex3-plan.md`'s own framing of the ledger as
+"append-only, like chat messages" (a chat log grows downward too). Verified against the real
+server via a two-`HttpEngineClient` harness: a second deposit's `getLedgerDelta(<prior version>)`
+returned exactly the one new entry, not the first one again — the exact `since`/`version` cursor
+semantics the polling loop depends on.
+
+**Real periodic sync: a daemon `Timer` in `ClientApp`, 1000ms, wrapped in `Platform.runLater`.**
+Chosen within the spec's 0.5-2s range as a middle value (responsive for a live demo, not
+excessive load) — a judgment call, not a measurement. Each tick reuses the exact
+`refreshEvents`/`refreshUsers`/`pollLedger` entry points every click-driven action already uses,
+rather than duplicating HTTP logic on the Timer's own thread. `Platform.runLater` here is not
+just style: `Async.run` had, until this stage, only ever been invoked from the FX Application
+Thread; a raw `TimerTask.run()` runs on the Timer's own background thread, so wrapping the tick
+avoids ever exercising that untested path — and is exactly the lecture-confirmed mechanism
+`docs-reference/ex3-plan.md` §4 specifies. Cancelled via `primaryStage.setOnCloseRequest` (the
+first such hook in this repo) with the daemon flag itself as a belt-and-suspenders fallback, so
+no background thread survives window close either way. Verified end-to-end via the same
+two-client harness: B's independent `listUsers()` poll picked up a change A made — on its very
+first tick — with no direct call between A's and B's `HttpEngineClient` instances.
+
+**Second real bug, found during manual two-window testing, fixed in this same commit: both tabs
+hidden behind an Ex2-era "has THIS window personally loaded a file" gate.** Right after logging
+in as two separate users with nobody having uploaded anything, both windows showed "No file
+loaded" on both tabs — even though both users were genuinely already registered server-side.
+`MainViewController.revealLoadedContent()` was called from exactly one place
+(`runLoad`'s `onSucceeded`), so nothing ever revealed either tab on login alone. Root cause: in
+Ex2, "load a file" was the only way any data entered the system at all (one shared in-process
+engine); in Ex3, users exist from `POST /login` alone and events accumulate from *any* client's
+uploads, so "has this window personally loaded a file" is a purely local flag with no
+relationship to whether the server already has real data. The deeper version was confirmed too,
+not just the two-empty-windows symptom: a second window that never personally uploads anything
+would never see events a first window uploaded, even with the new polling Timer already fetching
+that data correctly into the (hidden) lists every tick. **Fix, deliberately not a mechanical
+mirror:** checked whether Events actually needed different treatment than Users before assuming
+the same fix applied — it didn't; both tabs are shared server-side state under the identical
+flawed assumption. `revealLoadedContent()` promoted from `private` to `public` (kept as the one
+single, already-tested reveal mechanism, not a second differently-named method) and called once
+more, from `ClientApp.showMainShell` right after login, followed by `refreshEvents()`/
+`refreshUsers()` — mirroring `runLoad`'s own three-call shape minus the `filePathLabel` update,
+which has no meaning before any upload happens. `runLoad`'s own call site is untouched; the
+plain in-process launch keeps Ex2's original semantics exactly. Verified directly: a harness
+loading the real `MainView.fxml` confirmed both tabs start hidden and become visible with their
+placeholders hidden after this exact three-call sequence.
+
+Also in this commit: the artificial `Thread.sleep(1500)` removed from `MainViewController.runLoad`
+outright (Stage 3's own honest disclosure — no longer needed once the upload is genuinely
+asynchronous over real HTTP); confirmed nothing timed against it (`test.bat` never touches `gui`,
+and the `gui-local-user` self-registration in the same `Task` body is sequential, not
+sleep-dependent).
+
 ### `f9ff926` — 2026-09-10 — Fix: Events-tab Open/Close controls wrongly suppressed under the Ex3 client (fixedUsername/showOpenControl had collapsed into one signal)
 
 A real UI bug, caught by manual testing, not a cosmetic one: the Events tab showed the

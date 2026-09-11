@@ -46,6 +46,11 @@ public class MainViewController implements TabCoordinator {
     @FXML
     private Label filePathLabel;
 
+    // Hidden by default (see MainView.fxml) -- only shown once setUsername below receives a real, non-null
+    // username, which only ever happens under Exercise 3's HTTP client (ClientApp calls it right after login).
+    @FXML
+    private Label loggedInUserLabel;
+
     @FXML
     private ProgressIndicator loadProgressIndicator;
 
@@ -81,6 +86,9 @@ public class MainViewController implements TabCoordinator {
         this.username = username;
         eventsTabController.setUsername(username);
         usersTabController.setUsername(username);
+        loggedInUserLabel.setText(username == null ? "" : "Logged in as: " + username);
+        loggedInUserLabel.setVisible(username != null);
+        loggedInUserLabel.setManaged(username != null);
     }
 
     // Wires the header's controls and hands each tab its coordinator; called automatically by FXMLLoader once all

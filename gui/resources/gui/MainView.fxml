@@ -10,9 +10,9 @@
 <?import javafx.scene.layout.BorderPane?>
 <?import javafx.scene.layout.HBox?>
 
-<!-- Root layout: shared header (Load File button + color scheme picker + current-file label + load progress
-     indicator) over the Events/Users tab structure. Each tab's content is a separate <fx:include> sub-component
-     with its own controller, injected here as <fx:id>Controller. -->
+<!-- Root layout: shared header (Load File button + color scheme picker + current-file label + logged-in-user
+     label + load progress indicator) over the Events/Users tab structure. Each tab's content is a separate
+     <fx:include> sub-component with its own controller, injected here as <fx:id>Controller. -->
 <BorderPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
             fx:controller="gui.MainViewController">
     <top>
@@ -24,6 +24,10 @@
             <Label text="Color Scheme:" />
             <ComboBox fx:id="colorSchemeComboBox" prefWidth="140" />
             <Label fx:id="filePathLabel" text="No file loaded" />
+            <!-- Ex3 only: set by MainViewController.setUsername once the HTTP client's ClientApp logs a user in.
+                 Stays hidden under the plain in-process launch, which never calls setUsername (no login/session
+                 concept there); reuses the same username == null check used everywhere else in gui. -->
+            <Label fx:id="loggedInUserLabel" visible="false" managed="false" />
             <ProgressIndicator fx:id="loadProgressIndicator" prefWidth="20" prefHeight="20"
                                 visible="false" managed="false" />
         </HBox>
