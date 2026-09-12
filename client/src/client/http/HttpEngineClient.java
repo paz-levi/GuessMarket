@@ -28,6 +28,7 @@ import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
 
+import dto.ChatDeltaDto;
 import dto.CreateEventRequestDto;
 import dto.EventFilterDto;
 import dto.EventStatusDto;
@@ -91,6 +92,7 @@ public final class HttpEngineClient implements IEngine {
     private static final String PARAM_STATUS = "status";
     private static final String PARAM_COMMISSION_MODE = "commissionMode";
     private static final String PARAM_SINCE = "since";
+    private static final String PARAM_MESSAGE = "message";
     private static final String MULTIPART_FILE_PART = "file";
 
     // No real filename is available for the bare-InputStream overload (nothing in gui currently calls it -- only
@@ -273,6 +275,26 @@ public final class HttpEngineClient implements IEngine {
         HttpRequest request = HttpRequest.newBuilder(
                 uri("/user/ledger", Map.of(PARAM_SINCE, String.valueOf(since)))).GET().build();
         return handleResponse(send(request), LedgerDeltaDto.class);
+    }
+
+    // Not part of IEngine -- same reasoning as getLedgerDelta above: chat is not an engine capability, just
+    // server-side state the servlet layer exposes (engine.chat.ChatManager). GET /chat requires a session (unlike
+    // this class's public-market-data reads), matching the spec's framing of chat as logged-in users talking to
+    // each other -- an expired/missing session surfaces as the ordinary HttpClientException/NotLoggedIn mapping
+    // below, same as any other session-scoped call.
+    public ChatDeltaDto getChatDelta(int since) {
+        HttpRequest request = HttpRequest.newBuilder(
+                uri("/chat", Map.of(PARAM_SINCE, String.valueOf(since)))).GET().build();
+        return handleResponse(send(request), ChatDeltaDto.class);
+    }
+
+    // Posts one chat message as the session's own user (POST /chat/send derives the acting identity from the
+    // session, never from a request parameter -- see SendChatServlet). Returns the same ChatDeltaDto shape
+    // getChatDelta returns, already advanced past this message, so gui's instant local echo and its next poll can
+    // share one apply-and-advance-cursor code path (see gui.tabs.ChatTabController.applyDelta).
+    public ChatDeltaDto sendChatMessage(String text) {
+        HttpRequest request = postForm("/chat/send", Map.of(PARAM_MESSAGE, text));
+        return handleResponse(send(request), ChatDeltaDto.class);
     }
 
     // username is accepted for IEngine's transport-agnostic contract but never placed on the wire -- the server

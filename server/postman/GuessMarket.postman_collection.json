@@ -5,7 +5,14 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080/GuessMarket" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/GuessMarket"
+    },
+    {
+      "key": "chatVersionAfterDave",
+      "value": ""
+    }
   ],
   "item": [
     {
@@ -13,139 +20,298 @@
       "item": [
         {
           "name": "Login Alice (register + session)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const body = pm.response.json();",
-            "pm.test('balance is 0', () => pm.expect(body.balance).to.eql(0.0));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('balance is 0', () => pm.expect(body.balance).to.eql(0.0));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/login",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "username", "value": "Alice" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "Alice"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Deposit 1000 to Alice",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('balance is 1000', () => pm.expect(pm.response.json().balance).to.eql(1000.0));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('balance is 1000', () => pm.expect(pm.response.json().balance).to.eql(1000.0));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/user/deposit",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "amount", "value": "1000" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "amount",
+                  "value": "1000"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Upload commission-zero.xml (Alice becomes MM)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const events = pm.response.json();",
-            "pm.test('Zero Commission event present', () => pm.expect(events.some(e => e.eventName === 'Zero Commission')).to.be.true);"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const events = pm.response.json();",
+                  "pm.test('Zero Commission event present', () => pm.expect(events.some(e => e.eventName === 'Zero Commission')).to.be.true);"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/upload",
-            "body": { "mode": "formdata", "formdata": [
-              { "key": "file", "type": "file", "src": "../../test_files/commission-zero.xml" }
-            ]}
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "../../test_files/commission-zero.xml"
+                }
+              ]
+            }
           }
         },
         {
           "name": "List events (unfiltered)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('at least one event', () => pm.expect(pm.response.json().length).to.be.above(0));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/events" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('at least one event', () => pm.expect(pm.response.json().length).to.be.above(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events"
+          }
         },
         {
           "name": "List events filtered (LMSR, NOT_STARTED)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const events = pm.response.json();",
-            "pm.test('every event matches filter', () => events.forEach(e => { pm.expect(e.tradingMethod).to.eql('LMSR'); pm.expect(e.status).to.eql('NOT_STARTED'); }));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/events?tradingMethod=LMSR&status=NOT_STARTED" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const events = pm.response.json();",
+                  "pm.test('every event matches filter', () => events.forEach(e => { pm.expect(e.tradingMethod).to.eql('LMSR'); pm.expect(e.status).to.eql('NOT_STARTED'); }));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events?tradingMethod=LMSR&status=NOT_STARTED"
+          }
         },
         {
           "name": "Open Zero Commission (Alice, MM)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('status ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/open",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "eventName", "value": "Zero Commission" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "eventName",
+                  "value": "Zero Commission"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Alice participates in her own event (self-trade; allowed per lecturer, CLAUDE.md Section 8 item 5)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const body = pm.response.json();",
-            "pm.test('bought 5 shares', () => pm.expect(body.shareQuantity).to.eql(5));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('bought 5 shares', () => pm.expect(body.shareQuantity).to.eql(5));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/participate",
-            "body": { "mode": "urlencoded", "urlencoded": [
-              { "key": "eventName", "value": "Zero Commission" },
-              { "key": "optionNumber", "value": "1" },
-              { "key": "shareQuantity", "value": "5" }
-            ]}
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "eventName",
+                  "value": "Zero Commission"
+                },
+                {
+                  "key": "optionNumber",
+                  "value": "1"
+                },
+                {
+                  "key": "shareQuantity",
+                  "value": "5"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Get event status (Zero Commission)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('one trade in history', () => pm.expect(pm.response.json().tradeHistory.length).to.eql(1));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/events/status?eventName=Zero%20Commission" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('one trade in history', () => pm.expect(pm.response.json().tradeHistory.length).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events/status?eventName=Zero%20Commission"
+          }
         },
         {
           "name": "Get Alice's ledger (delta, since=0)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const body = pm.response.json();",
-            "pm.test('entries ascending by sequence', () => { for (let i = 1; i < body.entries.length; i++) pm.expect(body.entries[i].sequence).to.be.above(body.entries[i-1].sequence); });",
-            "pm.test('at least the deposit and open-funding entries', () => pm.expect(body.entries.length).to.be.above(1));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/user/ledger?since=0" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('entries ascending by sequence', () => { for (let i = 1; i < body.entries.length; i++) pm.expect(body.entries[i].sequence).to.be.above(body.entries[i-1].sequence); });",
+                  "pm.test('at least the deposit and open-funding entries', () => pm.expect(body.entries.length).to.be.above(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/user/ledger?since=0"
+          }
         },
         {
           "name": "Close Zero Commission (Alice, still her own session) -- winning option 1",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('status CLOSED', () => pm.expect(pm.response.json().status).to.eql('CLOSED'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status CLOSED', () => pm.expect(pm.response.json().status).to.eql('CLOSED'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/close",
-            "body": { "mode": "urlencoded", "urlencoded": [
-              { "key": "eventName", "value": "Zero Commission" },
-              { "key": "winningOptionNumber", "value": "1" }
-            ]}
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "eventName",
+                  "value": "Zero Commission"
+                },
+                {
+                  "key": "winningOptionNumber",
+                  "value": "1"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Logout Alice",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 204', () => pm.response.to.have.status(204));"
-          ]}}],
-          "request": { "method": "POST", "url": "{{baseUrl}}/logout" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/logout"
+          }
         },
         {
           "name": "Login Bob (register + session) -- a fresh login always supersedes Alice's, by design",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/login",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "username", "value": "Bob" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "Bob"
+                }
+              ]
+            }
           }
         },
         {
@@ -153,85 +319,187 @@
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/user/deposit",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "amount", "value": "500" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "amount",
+                  "value": "500"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Upload ex2-orderbook.xml (Bob becomes MM of Rain Tomorrow)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/upload",
-            "body": { "mode": "formdata", "formdata": [
-              { "key": "file", "type": "file", "src": "../../test_files/ex2-orderbook.xml" }
-            ]}
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "../../test_files/ex2-orderbook.xml"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Open Rain Tomorrow (Bob, MM of the order-book file)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('status ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status ACTIVE', () => pm.expect(pm.response.json().status).to.eql('ACTIVE'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/open",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "eventName", "value": "Rain Tomorrow" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "eventName",
+                  "value": "Rain Tomorrow"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Bob submits a resting BUY order",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const body = pm.response.json();",
-            "pm.test('rests, nothing filled', () => pm.expect(body.quantityFilled).to.eql(0));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('rests, nothing filled', () => pm.expect(body.quantityFilled).to.eql(0));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/order",
-            "body": { "mode": "urlencoded", "urlencoded": [
-              { "key": "eventName", "value": "Rain Tomorrow" },
-              { "key": "optionNumber", "value": "1" },
-              { "key": "side", "value": "BUY" },
-              { "key": "quantity", "value": "3" },
-              { "key": "price", "value": "0.20" }
-            ]}
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "eventName",
+                  "value": "Rain Tomorrow"
+                },
+                {
+                  "key": "optionNumber",
+                  "value": "1"
+                },
+                {
+                  "key": "side",
+                  "value": "BUY"
+                },
+                {
+                  "key": "quantity",
+                  "value": "3"
+                },
+                {
+                  "key": "price",
+                  "value": "0.20"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Get Bob's own detail (session default, no ?username=)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('username is Bob', () => pm.expect(pm.response.json().username).to.eql('Bob'));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/user" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('username is Bob', () => pm.expect(pm.response.json().username).to.eql('Bob'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/user"
+          }
         },
         {
           "name": "List users (now Alice and Bob both registered)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "pm.test('at least Alice and Bob', () => pm.expect(pm.response.json().length).to.be.above(1));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/users" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('at least Alice and Bob', () => pm.expect(pm.response.json().length).to.be.above(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/users"
+          }
         },
         {
           "name": "Get Alice's detail by explicit username (a read -- works under Bob's session too, no auth required for it)",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 200', () => pm.response.to.have.status(200));",
-            "const body = pm.response.json();",
-            "pm.test('username is Alice', () => pm.expect(body.username).to.eql('Alice'));",
-            "pm.test('has a participation entry for the closed Zero Commission event', () => pm.expect(body.activeParticipations.length).to.be.above(0));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/user?username=Alice" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('username is Alice', () => pm.expect(body.username).to.eql('Alice'));",
+                  "pm.test('has a participation entry for the closed Zero Commission event', () => pm.expect(body.activeParticipations.length).to.be.above(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/user?username=Alice"
+          }
         },
         {
           "name": "Logout Bob",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 204', () => pm.response.to.have.status(204));"
-          ]}}],
-          "request": { "method": "POST", "url": "{{baseUrl}}/logout" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/logout"
+          }
         }
       ]
     },
@@ -240,27 +508,105 @@
       "item": [
         {
           "name": "Duplicate login (Alice already registered) -> 409",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 409', () => pm.response.to.have.status(409));",
-            "pm.test('error UserAlreadyExistsException', () => pm.expect(pm.response.json().error).to.eql('UserAlreadyExistsException'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error UserAlreadyExistsException', () => pm.expect(pm.response.json().error).to.eql('UserAlreadyExistsException'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/login",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "username", "value": "Alice" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "Alice"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Unauthenticated deposit -> 401",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 401', () => pm.response.to.have.status(401));",
-            "pm.test('error NotLoggedIn', () => pm.expect(pm.response.json().error).to.eql('NotLoggedIn'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('error NotLoggedIn', () => pm.expect(pm.response.json().error).to.eql('NotLoggedIn'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/user/deposit",
-            "header": [{ "key": "Cookie", "value": "JSESSIONID=deliberately-invalid" }],
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "amount", "value": "10" }] }
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "JSESSIONID=deliberately-invalid"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "amount",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Unauthenticated chat read -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/chat?since=0"
+          }
+        },
+        {
+          "name": "Unauthenticated chat send -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/chat/send",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "message",
+                  "value": "should be rejected"
+                }
+              ]
+            }
           }
         },
         {
@@ -268,69 +614,298 @@
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/login",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "username", "value": "Carol" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "Carol"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Negative deposit -> 400",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 400', () => pm.response.to.have.status(400));",
-            "pm.test('error InvalidDepositException', () => pm.expect(pm.response.json().error).to.eql('InvalidDepositException'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error InvalidDepositException', () => pm.expect(pm.response.json().error).to.eql('InvalidDepositException'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/user/deposit",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "amount", "value": "-5" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "amount",
+                  "value": "-5"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Unknown event status -> 404",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 404', () => pm.response.to.have.status(404));",
-            "pm.test('error EventNotFoundException', () => pm.expect(pm.response.json().error).to.eql('EventNotFoundException'));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/events/status?eventName=Does%20Not%20Exist" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error EventNotFoundException', () => pm.expect(pm.response.json().error).to.eql('EventNotFoundException'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events/status?eventName=Does%20Not%20Exist"
+          }
         },
         {
           "name": "Non-MM open (Carol tries to open Bob's Rain Tomorrow) -> 403",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 403', () => pm.response.to.have.status(403));",
-            "pm.test('error UnauthorizedMarketMakerException', () => pm.expect(pm.response.json().error).to.eql('UnauthorizedMarketMakerException'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('error UnauthorizedMarketMakerException', () => pm.expect(pm.response.json().error).to.eql('UnauthorizedMarketMakerException'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/open",
-            "body": { "mode": "urlencoded", "urlencoded": [{ "key": "eventName", "value": "Rain Tomorrow" }] }
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "eventName",
+                  "value": "Rain Tomorrow"
+                }
+              ]
+            }
           }
         },
         {
           "name": "Unknown user detail -> 404",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 404', () => pm.response.to.have.status(404));",
-            "pm.test('error UserNotFoundException', () => pm.expect(pm.response.json().error).to.eql('UserNotFoundException'));"
-          ]}}],
-          "request": { "method": "GET", "url": "{{baseUrl}}/user?username=NoSuchUser" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error UserNotFoundException', () => pm.expect(pm.response.json().error).to.eql('UserNotFoundException'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/user?username=NoSuchUser"
+          }
         },
         {
           "name": "Missing required parameter -> 400",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 400', () => pm.response.to.have.status(400));",
-            "pm.test('error BadRequest', () => pm.expect(pm.response.json().error).to.eql('BadRequest'));"
-          ]}}],
-          "request": { "method": "POST", "url": "{{baseUrl}}/events/open" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error BadRequest', () => pm.expect(pm.response.json().error).to.eql('BadRequest'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/events/open"
+          }
         },
         {
           "name": "Non-.xml upload rejected -> 400",
-          "event": [{ "listen": "test", "script": { "exec": [
-            "pm.test('status 400', () => pm.response.to.have.status(400));",
-            "pm.test('error XmlValidationException', () => pm.expect(pm.response.json().error).to.eql('XmlValidationException'));"
-          ]}}],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error XmlValidationException', () => pm.expect(pm.response.json().error).to.eql('XmlValidationException'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/events/upload",
-            "body": { "mode": "formdata", "formdata": [
-              { "key": "file", "type": "file", "src": "../../test_files/error-6-wrong-extension.txt" }
-            ]}
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "../../test_files/error-6-wrong-extension.txt"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Chat",
+      "item": [
+        {
+          "name": "Login Dave (register + session) -- chat sender",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/login",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "Dave"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Dave sends a chat message",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('version advanced to 1 (or more, if earlier runs left messages)', () => pm.expect(body.version).to.be.above(0));",
+                  "pm.test('echo carries exactly the sent message, attributed to Dave', () => {",
+                  "    pm.expect(body.messages.length).to.eql(1);",
+                  "    pm.expect(body.messages[0].username).to.eql('Dave');",
+                  "    pm.expect(body.messages[0].text).to.eql('Hello from Dave');",
+                  "});",
+                  "pm.collectionVariables.set('chatVersionAfterDave', body.version);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/chat/send",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "message",
+                  "value": "Hello from Dave"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login Erin (register + session) -- chat receiver",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/login",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "Erin"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Erin polls chat since 0 and sees Dave's message",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('at least one message present, including the message from Dave', () => {",
+                  "    const found = body.messages.some(m => m.username === 'Dave' && m.text === 'Hello from Dave');",
+                  "    pm.expect(found).to.be.true;",
+                  "});",
+                  "pm.test('version matches what Dave already sent', () => pm.expect(body.version).to.eql(pm.collectionVariables.get('chatVersionAfterDave')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/chat?since=0"
+          }
+        },
+        {
+          "name": "Erin polls chat again at the caught-up version -- no new messages",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('no new messages at the steady state', () => pm.expect(body.messages.length).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/chat?since={{chatVersionAfterDave}}"
+          }
+        },
+        {
+          "name": "Logout Erin",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/logout"
+          }
+        },
+        {
+          "name": "Logout Dave",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/logout"
           }
         }
       ]

@@ -21,6 +21,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import engine.IEngine;
+import engine.chat.ChatManager;
 import exception.GuessMarketException;
 import exception.EventNotFoundException;
 import exception.IllegalTradeException;
@@ -82,6 +83,20 @@ public final class ServletUtils {
             IEngine engine = IEngine.createDefault();
             context.setAttribute(ServletConstants.CONTEXT_ATTRIBUTE_ENGINE, engine);
             return engine;
+        }
+    }
+
+    // Lazily creates the one ChatManager every chat servlet shares, same pattern as getEngine above -- a separate
+    // instance, since chat is not an IEngine capability (see engine.chat.ChatManager's own class doc).
+    public static ChatManager getChatManager(ServletContext context) {
+        synchronized (context) {
+            Object existing = context.getAttribute(ServletConstants.CONTEXT_ATTRIBUTE_CHAT_MANAGER);
+            if (existing instanceof ChatManager chatManager) {
+                return chatManager;
+            }
+            ChatManager chatManager = new ChatManager();
+            context.setAttribute(ServletConstants.CONTEXT_ATTRIBUTE_CHAT_MANAGER, chatManager);
+            return chatManager;
         }
     }
 

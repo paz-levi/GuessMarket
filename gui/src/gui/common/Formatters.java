@@ -6,6 +6,7 @@ import java.util.Locale;
 
 import javafx.util.StringConverter;
 
+import dto.ChatMessageDto;
 import dto.CommissionMode;
 import dto.EventStatus;
 import dto.EventSummaryDto;
@@ -126,6 +127,12 @@ public final class Formatters {
         return tradeTimestamp(transaction.timestamp()) + "  " + transactionType(transaction.type()) + eventPart
                 + "  —  " + signedDollars(transaction.amount())
                 + "  (balance " + dollars(transaction.balanceAfter()) + ")";
+    }
+
+    // One chat feed row: "HH:mm  username: text" -- same bare hour:minute convention tradeTimestamp already uses,
+    // since a chat log (like trade history) doesn't need to show its own date.
+    public static String chatMessage(ChatMessageDto message) {
+        return tradeTimestamp(message.timestamp()) + "  " + message.username() + ": " + message.text();
     }
 
     // One option's summary line: "price X, shares Y" for LMSR (the curve-price concept is real there), "shares Y"

@@ -27,9 +27,16 @@ public final class ServletConstants {
     public static final String PARAM_COMMISSION_MODE = "commissionMode";
     public static final String PARAM_SINCE = "since";
 
+    // The chat message text -- SendChatServlet's one form parameter beyond identity (which comes from the session).
+    public static final String PARAM_MESSAGE = "message";
+
     // The multipart part name UploadEventsFileServlet reads the uploaded file from.
     public static final String MULTIPART_FILE_PART = "file";
 
     // ServletContext attribute the one shared IEngine instance lives under.
     public static final String CONTEXT_ATTRIBUTE_ENGINE = "engine";
+
+    // ServletContext attribute the one shared ChatManager instance lives under -- same lazy-singleton pattern as
+    // CONTEXT_ATTRIBUTE_ENGINE, just for the separate (not-IEngine) chat feature.
+    public static final String CONTEXT_ATTRIBUTE_CHAT_MANAGER = "chatManager";
 }

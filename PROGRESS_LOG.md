@@ -6,6 +6,36 @@ scannable in seconds.
 
 ---
 
+### `8b45ab4` — 2026-09-11 — Ex3: always-visible "Logged in as: <username>" header label; 4th `--`-in-XML-comment recurrence and its process fix
+
+Small, user-suggested UX addition: a `loggedInUserLabel` in `MainView.fxml`'s header `HBox`,
+next to `filePathLabel`, set by `MainViewController.setUsername` (`"Logged in as: " +
+username`, `visible`/`managed` toggled on `username != null`). Ex3-only — `ClientApp` is the
+only caller of `setUsername`, so the plain in-process launch (no login/session concept) never
+shows it, matching the `username == null` check pattern already used everywhere else in `gui`.
+No other files touched.
+
+**Process failure, more serious than a normal bug.** While writing the new FXML comment, wrote
+a literal `--` inside it ("-- same username == null check") — the exact mistake CLAUDE.md's own
+standing rule (Section 7) exists to prevent, and this is the **4th** recurrence
+(`gui.tabs`/`EventsTab.fxml`+`UsersTab.fxml`, `web.xml`, `LoginView.fxml`, now `MainView.fxml`),
+the first three of which are what led to that rule being written in the first place — **in this
+same session**. Caught by the user reviewing the diff, not by any check on this end; the rule
+had demonstrably failed to prevent recurrence within the very session it was added.
+Fixed by rewording (`;` in place of `--`, matching the two prior fixes' own precedent), then
+confirmed clean via `grep -n -- '--'` over the whole file (only legitimate `<!--`/`-->`
+delimiters remained). **Adopted as a mandatory step, not a remembered one:** any edit to a
+`.fxml`/`.xml`/`.xsd` file must be immediately followed by that same grep, with every hit
+manually confirmed as a comment delimiter rather than in-body text, before the file is
+considered done — tied to the act of editing the file, not left to recall a written rule a
+fourth time. Verification before reporting done, this time up front rather than after being
+caught again: `build.bat` succeeded (`gui.jar`/`client.jar`; `ui` module's failure is the
+pre-existing, documented, unrelated Stage-1 one), plus a throwaway `FXMLLoader`-only harness
+that loaded the real `MainView.fxml` directly and confirmed it parses with `MainViewController`
+wired up.
+
+---
+
 ### `dac8d54` — 2026-09-10 — Ex3 Stage 4: deposit funds, transaction ledger, real 1s periodic polling; fix Users/Events tabs hidden behind Ex2-era load-a-file gate (92/92 engine tests unaffected)
 
 Wires up the last of Stage 3's deferred scope: `HttpEngineClient.depositFunds` (built in Stage

@@ -17,6 +17,7 @@ flowchart TD
             TabCoordinator["TabCoordinator (interface)"]
             EventsTabController["EventsTabController"]
             UsersTabController["UsersTabController"]
+            ChatTabController["ChatTabController (Chat bonus)"]
         end
 
         subgraph GUICOMPONENTS["gui.components (public — DTO to Node builders)"]
@@ -72,6 +73,10 @@ flowchart TD
             end
         end
 
+        subgraph CHAT["engine.chat (Chat bonus -- not part of IEngine)"]
+            ChatManager["ChatManager"]
+        end
+
         subgraph DTO["dto"]
             EventSummaryDto["EventSummaryDto"]
             EventStatusDto["EventStatusDto"]
@@ -94,6 +99,8 @@ flowchart TD
             TransactionRecordDto["TransactionRecordDto"]
             TransactionType["TransactionType"]
             LedgerDeltaDtoNode["LedgerDeltaDto"]
+            ChatMessageDto["ChatMessageDto (Chat bonus)"]
+            ChatDeltaDto["ChatDeltaDto (Chat bonus)"]
         end
 
         subgraph EXC["exception"]
@@ -127,6 +134,8 @@ flowchart TD
             ParticipateServlet["ParticipateServlet"]
             SubmitOrderServlet["SubmitOrderServlet"]
             CloseEventServlet["CloseEventServlet"]
+            SendChatServlet["SendChatServlet (Chat bonus)"]
+            GetChatServlet["GetChatServlet (Chat bonus)"]
         end
         ServletUtils["ServletUtils (engine singleton, Gson, error mapping, param parsing)"]
         SessionUtils["SessionUtils (session identity)"]
@@ -170,6 +179,7 @@ flowchart TD
     MainViewController -.->|"implements"| TabCoordinator
     MainViewController -->|"fx:include injects; setEngine/setCoordinator"| EventsTabController
     MainViewController -->|"fx:include injects; setEngine/setCoordinator"| UsersTabController
+    MainViewController -->|"fx:include injects; setUsername/setChatSender/pollChat"| ChatTabController
     EventsTabController -->|"listEvents()/getEventStatus()"| IEngine
     UsersTabController -->|"listUsers()/getUser()/getEventStatus()"| IEngine
     EventsTabController -->|"refreshEvents()/refreshUsers()"| TabCoordinator
@@ -208,6 +218,14 @@ flowchart TD
     SubmitOrderServlet -->|"submitOrder()"| IEngine
     CloseEventServlet -->|"closeEvent()"| IEngine
     ServletUtils -->|"maps GuessMarketException subtype to HTTP status, writes JSON"| EXC
+    SendChatServlet -->|"requireLoggedInUsername()"| SessionUtils
+    GetChatServlet -->|"requireLoggedInUsername()"| SessionUtils
+    SendChatServlet -->|"postMessage()"| ChatManager
+    GetChatServlet -->|"getVersionAndEntries()"| ChatManager
+    ServletUtils -->|"getChatManager(ServletContext) -- one shared instance"| ChatManager
+    ChatManager -->|"builds/returns"| ChatMessageDto
+    ChatManager -->|"builds/returns"| ChatDeltaDto
+    ChatTabController -->|"sender/fetchDelta function references, never a direct HTTP dependency"| ChatDeltaDto
 ```
 
 ---
@@ -2692,3 +2710,171 @@ mandated version.
 used here), and IntelliJ picking up the new `server` module without a manual reimport (`.idea/`
 is gitignored, so `server.iml` is committed but its `modules.xml` registration is local-only —
 the same situation every earlier module split in this project has left for the next IDE open).
+
+---
+
+## Exercise 3 — Chat Bonus: engine.chat, /chat servlets, and the gui Chat tab
+
+**Why this exists.** The spec's Chat bonus, built against the lecturer's real project source
+(`engine.chat.ChatManager`/`SingleChatEntry`, `chatWebApp`'s servlets, the JavaFX
+`ChatAreaController`/`ChatAreaRefresher`) rather than only the transcript — see
+` docs-reference/ex3-plan.md`. Three deliberate deviations from the lecturer's exact
+implementation, confirmed by reading their real source, are called out below rather than
+silently matched.
+
+**Deliberately not part of `IEngine`.** Chat is a single global feed, not a per-user or
+per-event capability the way every existing `IEngine` method is — the same reasoning that
+already keeps `dto.LedgerDeltaDto` outside `IEngine` (built by `LedgerServlet` itself, not
+returned by any engine method). `engine.chat` is a new package alongside `engine.domain`/
+`engine.impl`, holding one class with no relationship to `IEngine`/`EngineImpl` at all.
+
+#### `dto.ChatMessageDto` / `dto.ChatDeltaDto` (`engine/src/dto/*.java`) — new
+- **What they are:** `record ChatMessageDto(String username, String text, LocalDateTime timestamp)`
+  and `record ChatDeltaDto(int version, List<ChatMessageDto> messages)`. `ChatMessageDto`
+  deliberately has **no sequence field** — unlike `TransactionRecordDto` (many independent
+  per-user ledgers, each needing its own 1-based sequence), chat is one single shared
+  append-only list, so the list's own size is already a sufficient, simpler version number.
+- **What they connect to:** Both directions of `engine.chat.ChatManager` return/consume
+  `ChatDeltaDto`; `client.http.HttpEngineClient`'s two new methods deserialize it the same way
+  `getLedgerDelta` already deserializes `LedgerDeltaDto` (no `TypeToken` needed — Gson resolves
+  the nested `List<ChatMessageDto>` field reflectively).
+
+#### `engine.chat.ChatManager` (`engine/src/engine/chat/ChatManager.java`) — new
+- **What it is:** One global, append-only `List<ChatMessageDto>` behind one lock, with two
+  methods: `getVersionAndEntries(int since)` (a read: current version plus every message
+  strictly newer than `since`) and `postMessage(String username, String text)` (appends one
+  message and returns it wrapped in the identical `ChatDeltaDto` shape the read method
+  returns, already advanced past itself).
+- **Deviation 3 (of 3) from the lecturer's exact design, and the one with real architectural
+  weight.** Their `ChatManager` self-synchronizes each individual method, and their servlet
+  *additionally* wraps `getVersion()` + `getChatEntries()` in `synchronized(getServletContext())`
+  to keep that pair atomic — their own class-level Javadoc explicitly warns this second layer
+  is required. Here, `getVersionAndEntries()` does both reads under one internal lock, so the
+  servlet layer never needs to know locking is happening at all — matching how `EngineImpl`'s
+  own `ReentrantReadWriteLock` design (Stage 2) already keeps locking entirely internal to the
+  class it protects, rather than leaking a second locking responsibility outward.
+- **The boundary condition that matters:** `since >= version` (not `since == version`) returns
+  no messages — a poller sitting exactly caught up between messages is the ordinary steady
+  state, not an edge case, and must never see the last message repeated. `List.copyOf(...)` on
+  the `subList` (rather than returning the live view directly) is deliberate: `subList` is a
+  window onto the *same* backing list, so handing it out unguarded would let a caller observe
+  (or, worse, structurally modify) `messages` after the lock is released; copying inside the
+  lock is the fix, and a genuine improvement over the lecturer's own exposed-subList approach.
+  `postMessage`'s returned version already reflects the just-added message, so a sender's own
+  next poll (using that version as its own `since`) can never see its own message again.
+- **What it connects to:** `server.ServletUtils.getChatManager(ServletContext)` (new, same
+  lazy-singleton-on-the-context pattern as `getEngine`) is the only way any servlet reaches an
+  instance. `SendChatServlet`/`GetChatServlet` are its only two callers.
+- **Tests:** `engine/test/engine/chat/ChatManagerTest.java` — the `since >= version` boundary
+  (both the empty-feed case and the exact-caught-up case), a sender's own cursor never
+  re-seeing its own message, ordering across several posts, and a 20-thread concurrent-post
+  test (same `CountDownLatch`-gated shape as `EngineConcurrencyTest`) proving the lock actually
+  serializes the size-then-append sequence — without it, two threads could read the same
+  `messages.size()` before either appends, corrupting version-as-size. **98/98 engine tests
+  green** (92 existing + 6 new), confirmed via `test.bat`.
+
+### `server.servlets` — two new servlets
+
+| Servlet | Method + path | Notes |
+|---|---|---|
+| `SendChatServlet` | POST `/chat/send` | Session-derived username, `message` form param |
+| `GetChatServlet` | GET `/chat?since=` | Delta poll; **requires login**, unlike every other read-only servlet |
+
+- **Deviation 1 of 3: `POST`, not `GET`, for sending.** The lecturer's own `SendChatServlet`
+  uses `doGet` for a mutating action — inconsistent with normal REST semantics, and with every
+  other write-capable endpoint already in this project (login, deposit, open, participate,
+  submitOrder, close are all `POST`). Kept consistent with this codebase's own convention
+  rather than copying that specific inconsistency.
+- **Both endpoints require `SessionUtils.requireLoggedInUsername(request)`** — a real,
+  user-directed decision (not the lecturer-mirroring default): the spec frames chat
+  specifically as logged-in users chatting with each other, in both directions, unlike
+  `EventStatusServlet`/`EventsListServlet`'s public-market-data reads, which stay open to
+  anyone. `GetChatServlet` calls it purely for the gate; the returned username isn't otherwise
+  needed for a read.
+- `SendChatServlet` additionally requires `ServletUtils.requireParam(request, PARAM_MESSAGE)`
+  — a missing/blank message is a 400 (`BadRequestException`), never reaching `ChatManager`.
+- **No new `GuessMarketException` subtype.** Chat has no business rule to violate beyond
+  "must be logged in" (`NotLoggedInException`, already existed) and "message text required"
+  (`BadRequestException`, already existed) — both already-established, non-`GuessMarketException`
+  siblings every other servlet's catch block already uses.
+- `ServletConstants` gains `PARAM_MESSAGE` and `CONTEXT_ATTRIBUTE_CHAT_MANAGER`.
+
+### `client.http.HttpEngineClient` — two new client-only methods
+- `getChatDelta(int since)` / `sendChatMessage(String text)` — not part of `IEngine`, same
+  reasoning and shape as the existing `getLedgerDelta`: `ChatDeltaDto` has no engine-level
+  equivalent at all, so these live only on the concrete HTTP client, called directly by
+  `gui.tabs.ChatTabController` via plain function references (never through `IEngine`).
+
+### `gui` — the Chat tab
+- **`gui.tabs.ChatTabController` + `gui/resources/gui/tabs/ChatTab.fxml`** — a third top-level
+  tab in `MainView.fxml` (a fully separate feature from the prediction-market product itself,
+  so a dedicated tab rather than nesting it inside Users, per explicit direction). A `StackPane`
+  of real content (message `ListView` + text field + Send button) over a "logged in required"
+  placeholder, defaulting to the placeholder — same reveal-gate shape as `UsersTab.fxml`'s own
+  "No file loaded" placeholder — so the plain in-process launch (`GuessMarketApp`, which never
+  calls `setUsername`/`setChatSender` at all) never shows a broken chat box.
+- **Decoupled from HTTP entirely**, exactly like `UsersTabController.pollLedger`'s own
+  `IntFunction<LedgerDeltaDto>` pattern: `ChatTabController.setSender(Function<String, ChatDeltaDto>)`
+  and `pollChat(IntFunction<ChatDeltaDto>)` both take plain function references supplied by the
+  hosting shell, so neither this class nor the rest of `gui` ever needs a dependency on
+  `client.http`.
+- **One shared `applyDelta(ChatDeltaDto)`** handles both the instant local echo (the sender's
+  own `postMessage` response, applied immediately rather than waiting for the next poll tick)
+  and every periodic poll's delta — appends `messages()` and advances the cursor to `version()`
+  unconditionally, so a sender's own message is never re-delivered by their own next poll.
+- `Formatters.chatMessage(ChatMessageDto)` — `"HH:mm  username: text"`, the same bare
+  hour:minute convention `tradeTimestamp` already uses.
+- `MainViewController` gains a `chatTabController` field, threads `setUsername` through to it
+  (toggling the placeholder), and exposes `setChatSender(...)`/`pollChat(...)` delegating
+  methods, mirroring `pollLedger`'s own shape exactly.
+
+### `client.ClientApp` — wiring
+- `showMainShell` gains one line, `controller.setChatSender(httpEngineClient::sendChatMessage)`,
+  alongside the existing `setEngine`/`setUsername` calls.
+- `startPolling`'s tick gains `mainViewController.pollChat(httpEngineClient::getChatDelta)`,
+  folded into the exact same 1000ms `Timer` Stage 4 already built — no second `Timer`, per the
+  bonus scope's own explicit instruction to reuse the existing interval.
+
+### Postman coverage
+- New `03 Chat` folder in `server/postman/GuessMarket.postman_collection.json`: Dave sends a
+  message (asserts the echo's `version`/`messages` shape), Erin logs in fresh and polls
+  `since=0` (asserts she receives exactly Dave's message and the matching version), then polls
+  again at the caught-up version (asserts nothing new), then both log out.
+- Two new cases added to the existing `02 Error cases` folder — unauthenticated `GET /chat` and
+  unauthenticated `POST /chat/send`, both asserting 401 — inserted immediately after
+  "Unauthenticated deposit -> 401" specifically, **not** appended at the end of that folder: by
+  the folder's end, Carol's session (logged in a few requests later, never logged out) is still
+  active in Postman's shared cookie jar, which would have made those two cases silently
+  authenticated instead of testing what their names claim. Same cookie-jar-state reasoning
+  already documented for this collection in the Stage 2 section above.
+- **64/64 assertions passed** on a clean, freshly-restarted server (`catalina.bat stop`/`start`,
+  confirmed via a fresh `GET /events` returning 200 before running), run once via
+  `npx newman run GuessMarket.postman_collection.json` **from the `server/postman/` directory**
+  — the collection's own upload requests use a `src` path relative to the collection file's own
+  location (`../../test_files/...`), which only resolves correctly when newman's working
+  directory is the collection's own folder; running from the repo root instead caused every
+  upload-dependent request to 400, a pure invocation-directory artifact with no relationship to
+  the chat changes (confirmed by first reproducing it, then fixing the invocation, not the
+  collection).
+
+### Manual two-session verification (real HTTP, not engine-internal)
+Against the same live server, before the Postman run: two separate cookie jars (`curl -c`),
+registered as `ChatAlice<ts>`/`ChatBob<ts>`. Bob's first poll (`since=0`) returned
+`{"version":0,"messages":[]}`; Alice's send returned
+`{"version":1,"messages":[{"username":"...","text":"Hello from Alice", ...}]}`; Bob's next poll
+at `since=0` returned exactly that one message with `version:1`; Bob's poll at `since=1`
+(now caught up) returned `{"version":1,"messages":[]}` — the exact `since`/`version` cursor
+semantics the `gui` polling loop depends on, proven over real HTTP between two independent
+sessions, not just inside `ChatManagerTest`'s single-process unit coverage. Unauthenticated
+`GET /chat` and `POST /chat/send` (no cookie jar at all) both returned 401, and a logged-in send
+with no `message` parameter returned 400 with the expected `BadRequest` body.
+
+**Standing FXML-comment check applied, per CLAUDE.md Section 7:** `grep -n -- '--'` run against
+both the new `ChatTab.fxml` and the edited `MainView.fxml`; every hit in both files is a
+legitimate `<!--`/`-->` delimiter. One real near-miss caught during writing, not after: the
+placeholder label's own text originally read "...logged in -- use the Exercise 3 client." (a
+`--` inside a plain attribute value, not a comment — legal XML, but avoided anyway to stay
+unambiguously within this project's zero-tolerance convention) and was reworded to a semicolon
+before the file was ever considered done.
+
+**Not committed** — left staged for review, per this project's standing workflow.

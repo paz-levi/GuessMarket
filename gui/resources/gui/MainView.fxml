@@ -40,6 +40,9 @@
             <Tab text="Users">
                 <fx:include fx:id="usersTab" source="tabs/UsersTab.fxml" />
             </Tab>
+            <Tab text="Chat">
+                <fx:include fx:id="chatTab" source="tabs/ChatTab.fxml" />
+            </Tab>
         </TabPane>
     </center>
 </BorderPane>

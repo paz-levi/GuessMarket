@@ -98,6 +98,7 @@ public class ClientApp extends Application {
             MainViewController controller = loader.getController();
             controller.setEngine(httpEngineClient);
             controller.setUsername(username);
+            controller.setChatSender(httpEngineClient::sendChatMessage);
             this.mainViewController = controller;
 
             // Mirrors runLoad's own onSucceeded shape (reveal, then refresh both tabs) minus the filePathLabel
@@ -123,11 +124,13 @@ public class ClientApp extends Application {
     // Starts the real periodic sync -- everything except your own actions' instant refresh-after-success (those
     // call sites are unchanged) depends on this to surface OTHER users' changes. TimerTask/Timer per
     // docs-reference/ex3-plan.md's own lecture-confirmed client-side mechanism; the whole tick body runs inside
-    // Platform.runLater since Async.run (which refreshEvents/refreshUsers/pollLedger each use internally) has,
-    // until now, only ever been invoked from the FX Application Thread -- a raw TimerTask.run() executes on the
+    // Platform.runLater since Async.run (which refreshEvents/refreshUsers/pollLedger/pollChat each use internally)
+    // has, until now, only ever been invoked from the FX Application Thread -- a raw TimerTask.run() executes on the
     // Timer's own background thread instead, so this avoids ever exercising that untested path. Deliberately
-    // reuses the exact same refreshEvents/refreshUsers/pollLedger entry points every click-driven action already
-    // uses rather than duplicating HTTP-calling logic on the Timer's own thread.
+    // reuses the exact same refreshEvents/refreshUsers/pollLedger/pollChat entry points every click-driven action
+    // already uses rather than duplicating HTTP-calling logic on the Timer's own thread. pollChat is the chat
+    // bonus's own delta poll, folded into this same 1000ms tick rather than a second Timer -- no reason to diverge
+    // from what's already running (docs-reference/ex3-plan.md's Chat bonus scope).
     private void startPolling() {
         pollTimer = new Timer("guessmarket-poll", true); // daemon -- see the setOnCloseRequest hook's own comment
         pollTimer.scheduleAtFixedRate(new TimerTask() {
@@ -137,6 +140,7 @@ public class ClientApp extends Application {
                     mainViewController.refreshEvents();
                     mainViewController.refreshUsers();
                     mainViewController.pollLedger(httpEngineClient::getLedgerDelta);
+                    mainViewController.pollChat(httpEngineClient::getChatDelta);
                 });
             }
         }, POLL_INTERVAL_MS, POLL_INTERVAL_MS);

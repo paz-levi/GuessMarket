@@ -1,6 +1,7 @@
 package gui;
 
 import java.io.File;
+import java.util.function.Function;
 import java.util.function.IntFunction;
 
 import javafx.concurrent.Task;
@@ -12,10 +13,12 @@ import javafx.scene.control.ProgressIndicator;
 import javafx.stage.FileChooser;
 import javafx.stage.Window;
 
+import dto.ChatDeltaDto;
 import dto.LedgerDeltaDto;
 import engine.IEngine;
 import exception.UserAlreadyExistsException;
 import gui.common.Dialogs;
+import gui.tabs.ChatTabController;
 import gui.tabs.EventsTabController;
 import gui.tabs.TabCoordinator;
 import gui.tabs.UsersTabController;
@@ -62,6 +65,9 @@ public class MainViewController implements TabCoordinator {
     @FXML
     private UsersTabController usersTabController;
 
+    @FXML
+    private ChatTabController chatTabController;
+
     private IEngine engine;
 
     // Null under the plain in-process launch (GuessMarketApp/run.bat, no login screen). Set once by Exercise 3's
@@ -86,9 +92,19 @@ public class MainViewController implements TabCoordinator {
         this.username = username;
         eventsTabController.setUsername(username);
         usersTabController.setUsername(username);
+        chatTabController.setUsername(username);
         loggedInUserLabel.setText(username == null ? "" : "Logged in as: " + username);
         loggedInUserLabel.setVisible(username != null);
         loggedInUserLabel.setManaged(username != null);
+    }
+
+    // Supplied once by Exercise 3's ClientApp right after login, alongside setEngine/setUsername -- the Chat tab's
+    // only way to actually send a message, since chat is not an IEngine capability (see engine.chat.ChatManager's
+    // own doc) and gui must never depend on client.http directly. Never called by the plain in-process launch,
+    // which has no chat backend to talk to at all; ChatTabController's own username == null gate already hides the
+    // whole Chat tab's content in that case, so sender is simply never invoked.
+    public void setChatSender(Function<String, ChatDeltaDto> sender) {
+        chatTabController.setSender(sender);
     }
 
     // Wires the header's controls and hands each tab its coordinator; called automatically by FXMLLoader once all
@@ -127,6 +143,14 @@ public class MainViewController implements TabCoordinator {
     // practice) so neither this class nor UsersTabController ever needs a dependency on the client module.
     public void pollLedger(IntFunction<LedgerDeltaDto> fetchDelta) {
         usersTabController.pollLedger(fetchDelta);
+    }
+
+    // Delegates to the Chat tab's own poll -- a no-op there unless someone is actually logged in. Called once per
+    // periodic tick by client.ClientApp's Timer, alongside refreshEvents/refreshUsers/pollLedger, reusing the same
+    // 1000ms interval; fetchDelta is supplied by the caller (HttpEngineClient::getChatDelta in practice) so neither
+    // this class nor ChatTabController ever needs a dependency on the client module.
+    public void pollChat(IntFunction<ChatDeltaDto> fetchDelta) {
+        chatTabController.pollChat(fetchDelta);
     }
 
     // Swaps the Scene's active stylesheet to the chosen scheme -- Scene.getStylesheets() is observable, so
