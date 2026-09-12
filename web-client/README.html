@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Guess Market — Web Client (Exercise 4 Bonus) README</title>
+<style>
+  body { font-family: Georgia, "Times New Roman", serif; max-width: 760px; margin: 40px auto; padding: 0 20px; line-height: 1.5; color: #1a1a1a; }
+  h1 { font-size: 22px; border-bottom: 2px solid #333; padding-bottom: 8px; }
+  h2 { font-size: 16px; margin-top: 28px; }
+  code, .url { font-family: "Consolas", monospace; background: #f2f2f2; padding: 1px 5px; border-radius: 3px; }
+  .url-callout { font-size: 18px; font-weight: bold; text-align: center; padding: 10px; background: #f2f2f2; border-radius: 6px; margin: 12px 0; }
+  ol, ul { padding-left: 22px; }
+  .ai-workflow li { margin-bottom: 10px; }
+  .placeholder-note { font-style: italic; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>Guess Market — Web Client (Exercise 4 Bonus)</h1>
+
+<p>A React + Vite web client for the Guess Market server, submitted separately from Exercise 3.
+It runs against the <strong>same, unchanged</strong> Tomcat server/WAR as the JavaFX client — no
+different way to start or configure Tomcat is needed.</p>
+
+<p>Scope (per the Exercise 4 spec section): a login screen, a <strong>read-only</strong> Events
+screen, and a "My Account" screen (own balance, deposit funds, transaction ledger). File upload,
+chat, and creating/opening/closing/trading events are <strong>not</strong> part of this client —
+those stay JavaFX-only.</p>
+
+<h2>How to run it (grader instructions)</h2>
+<ol>
+  <li>Start the Guess Market server exactly as for Exercise 3 (deploy <code>GuessMarket.war</code>
+      to Tomcat and start Tomcat — see the main project submission notes for that step; this
+      client does not change it).</li>
+  <li>From this project's root folder, run <code>run-web-client.bat</code>. It runs
+      <code>npm install</code> and then <code>npm run dev</code> — no other tool installation
+      happens automatically.</li>
+  <li>Once the dev server starts, open the URL it prints in a browser:</li>
+</ol>
+<div class="url-callout">http://localhost:5173</div>
+<p>Log in with any username (no password) and use the Events / My Account tabs.</p>
+
+<p><strong>The Events screen shows only events already uploaded to the server.</strong> File
+upload is out of scope for this client (per the spec). Before there is anything to see on the
+Events screen, launch the already-submitted Exercise 3 JavaFX client (<code>run-client.bat</code>),
+log in there, and upload a real events file (e.g. one of <code>test_files/*.xml</code>). This is
+the spec's own intended workflow — the web client sees whatever JavaFX clients have uploaded to
+the shared server, not a separate data source.</p>
+
+<p>The web client (<span class="url">http://localhost:5173</span>) and the server
+(<span class="url">http://localhost:8080</span>) are deliberately different origins — the server
+has a small CORS filter (<code>server/src/server/CorsFilter.java</code>) added specifically so
+this client's credentialed cross-origin requests are allowed; nothing else about the server
+changed.</p>
+
+<h2>What the .bat file does</h2>
+<p><code>run-web-client.bat</code> changes into <code>web-client/</code>, runs
+<code>npm install</code> to fetch React/Vite and their dependencies into
+<code>web-client/node_modules/</code> (not committed), then runs <code>npm run dev</code> to
+start the Vite dev server on port 5173. It assumes only Node.js/npm are already installed on the
+grading machine — nothing else.</p>
+
+<h2>AI Workflow</h2>
+<p class="placeholder-note">(To be filled in personally — not written by the AI.)</p>
+<ul class="ai-workflow">
+  <li>Which AI tool was used, and why?</li>
+  <li>Were other tools tried first? What happened?</li>
+  <li>Where did genuine manual intervention or verification end up being needed?</li>
+  <li>Rough time estimate for this exercise with AI assistance vs. an estimate for doing it
+      without AI at all.</li>
+  <li>Prior front-end/React experience, if any?</li>
+  <li>Was this style of AI-assisted work enjoyable? Any other reflections?</li>
+</ul>
+
+</body>
+</html>

@@ -140,6 +140,12 @@ flowchart TD
         ServletUtils["ServletUtils (engine singleton, Gson, error mapping, param parsing)"]
         SessionUtils["SessionUtils (session identity)"]
         ServletConstants["ServletConstants"]
+        CorsFilter["CorsFilter (Ex4 -- credentialed cross-origin grant, localhost only)"]
+    end
+
+    subgraph WEBCLIENT["web-client/ (Ex4 bonus -- React+Vite, no IntelliJ module)"]
+        ApiClient["src/api/client.js"]
+        Screens["Login/Events/User screens"]
     end
 
     Main -->|"createDefault() / calls"| IEngine
@@ -226,6 +232,9 @@ flowchart TD
     ChatManager -->|"builds/returns"| ChatMessageDto
     ChatManager -->|"builds/returns"| ChatDeltaDto
     ChatTabController -->|"sender/fetchDelta function references, never a direct HTTP dependency"| ChatDeltaDto
+    CorsFilter -->|"wraps every request to"| SERVLETS
+    Screens --> ApiClient
+    ApiClient -->|"credentialed cross-origin fetch()"| SERVER
 ```
 
 ---
@@ -3007,3 +3016,185 @@ each real screen at exactly the app's own enforced floor — `ClientApp.setMinWi
   the spec's own assumption.
 - The WAR's filename (`GuessMarket.war`) is stable and produced identically by
   `build-server.bat` every run — nothing renames it.
+
+---
+
+## Exercise 4 Bonus — Web Client (`server.CorsFilter` + `web-client/`)
+
+A separate submission (spec's own Exercise 4 section), sharing the same due date as Exercise 3
+but scoped deliberately narrow: a login screen, a **read-only** Events screen, and a "My
+Account" screen (own balance, deposit, ledger). No upload, no chat, no create/open/close/trade —
+those stay JavaFX-only. Runs against the exact same, unmodified `GuessMarket.war`/Tomcat as
+Exercise 3; the only server-side change anywhere is one new filter.
+
+### `server.CorsFilter` (`server/src/server/CorsFilter.java`) — new
+
+- **What it is:** A `jakarta.servlet.Filter`, routed via `@WebFilter("/*")` (the same
+  annotation-only convention every `@WebServlet` here already uses, so `web.xml` needed no
+  edit), applied in front of every existing servlet.
+- **Why it exists:** The web client runs on a different origin than Tomcat (a Vite dev server on
+  `localhost:5173` vs. Tomcat on `localhost:8080`). Browsers block cross-origin `fetch()` by
+  default, and since this server's identity mechanism is a plain session cookie
+  (`SessionUtils`), the grant has to be credentialed — `Access-Control-Allow-Credentials: true`
+  plus a *specific* (non-wildcard) `Access-Control-Allow-Origin`, since browsers reject the
+  wildcard+credentials combination outright.
+- **What it connects to:** Nothing engine/servlet-side changes — it only adds response headers
+  (and short-circuits an `OPTIONS` preflight with 200 rather than letting it fall through to a
+  `@WebServlet` that doesn't implement `doOptions`). Scoped to `localhost`/`127.0.0.1` origins
+  only (any port, reflected back rather than hardcoded, since Vite may pick a port other than
+  5173 if that one's busy) — a deliberately narrower grant than reflecting any origin, since
+  credentialed CORS exposes session-authenticated responses to whatever page the browser lets
+  through.
+- **Verified with a real cross-origin request, not a same-origin stand-in:** a real Vite dev
+  server on `localhost:5173` and a real Tomcat on `localhost:8080`, both running simultaneously.
+  `curl` with an explicit `Origin` header confirmed the exact header values a browser checks
+  (`Access-Control-Allow-Origin` reflecting `http://localhost:5173`,
+  `Access-Control-Allow-Credentials: true`, `Vary: Origin`, and a correctly-answered `OPTIONS`
+  preflight), and confirmed a disallowed origin (`http://evil.example.com`) gets no CORS headers
+  at all. Separately, the real `web-client/src/api/client.js` module (imported directly, not
+  re-implemented) was run end-to-end against the live server with an `Origin` header injected on
+  every call and a small cookie jar simulating a browser's own `credentials: "include"` store
+  (Node's `fetch` has no automatic cookie jar the way a browser does): login → events list
+  (including a real event a `curl`-simulated "prior upload" seeded) → event status → own user
+  detail → deposit → ledger delta (shows the deposit) → ledger delta again (empty, caught up) →
+  an invalid filter value correctly reconstructed as a 400 `ApiError`. All 98 `engine` tests
+  still pass unaffected (only `server.CorsFilter` is new server-side).
+
+### `web-client/` — new top-level directory (React + Vite, not an IntelliJ module)
+
+Plain npm project, no dependency on any Java module — talks to the server purely over HTTP, the
+same servlets `HttpEngineClient` already calls. Chosen visual direction: "Trading Desk" (dark
+near-black palette, monospace numerals for prices/balances via IBM Plex Mono, IBM Plex Sans for
+chrome, green/red/amber for gain/loss/highlight).
+
+- `index.html` / `src/main.jsx` / `src/App.jsx` — entry point and the top-level state machine.
+  On mount, `App` silently probes `GET /user` (no `?username=`) to detect an existing session —
+  the session cookie survives a page refresh even though React state does not — before deciding
+  whether to show the login screen or the logged-in shell (Events / My Account tabs + a Log Out
+  button, `POST /logout`).
+- `src/api/client.js` — a thin `fetch()` wrapper mirroring `HttpEngineClient`'s own error-body
+  shape (`{error, message}` → a typed `ApiError`) and request shape (form-urlencoded POSTs,
+  query-param GETs); every call passes `credentials: "include"` so the session cookie rides on
+  every request, the browser's own equivalent of `HttpEngineClient`'s shared `CookieManager`.
+  Base URL is a fixed constant (`http://localhost:8080/GuessMarket`), matching
+  `ClientApp.BASE_URL`'s own "no configurable server address" choice.
+- `src/screens/LoginScreen.jsx`, `EventsScreen.jsx`, `UserScreen.jsx` — the three screens. Events
+  is read-only (filter bar + list + detail, no action controls at all — matching
+  `gui.tabs.EventsTabController`'s composition minus every Open/Buy/Close control); User shows
+  only the logged-in user's own balance/deposit-form/ledger (not a browse-other-users list, a
+  deliberately narrower scope than `UsersTabController`'s own left-hand list).
+- `src/components/` — `EventFilterBar`, `EventList`, `EventDetail` (prices/shares, MM
+  balance/commission, LMSR trade history, or Order Book books+participants), `UserPanel`
+  (balance/blocked badge, deposit form, ledger table), `StatusBadge`.
+- `src/hooks/usePolling.js` — one small hook, 1000ms interval matching
+  `ClientApp.POLL_INTERVAL_MS` exactly. Events screen re-fetches the list *and* the currently
+  selected event's status every tick (unlike the JavaFX tabs, this screen has no trade action to
+  piggyback a refresh on, so the poll itself is what keeps prices/order books live); User screen
+  full-fetches `GET /user` (balance/blocked) and delta-polls `GET /user/ledger?since=` every
+  tick — the same full-fetch-for-mutable-state / delta-for-append-only-feed split
+  `UsersTabController` already uses (`refreshUsersList` vs. `pollLedger`), just combined into one
+  tick since this screen only ever shows one user's own data.
+- `src/formatters.js` — mirrors `gui.common.Formatters` field-for-field (2-decimal money,
+  `HH:mm` timestamps sliced directly from the ISO string rather than parsed through `Date`, to
+  avoid the browser's local timezone being applied to what is already a zone-less
+  `LocalDateTime`), so wording never drifts from the JavaFX client for the same data.
+- `vite.config.js` — deliberately **no dev-server proxy** to Tomcat; every call is a genuinely
+  cross-origin `fetch()`, so the CORS path is actually exercised rather than hidden.
+- `run-web-client.bat` (repo root) — `npm install` then `npm run dev`; per the spec's own rule,
+  only `npm install` is allowed to run automatically, nothing else is assumed present on the
+  grading machine beyond Node/npm.
+- `README.md` / `README.html` — the grader-facing URL/instructions plus an **AI Workflow**
+  section left as unanswered placeholder prompts, per the spec's own requirement that those be
+  filled in personally rather than by the AI.
+
+### Scope expansion — real trading on the Events screen (revised, same session)
+
+The Events screen went from strictly read-only to supporting the same four trading actions the
+JavaFX client has (Open/Participate/Submit Order/Close). **Zero server-side change** — every
+servlet involved (`OpenEventServlet`, `ParticipateServlet`, `SubmitOrderServlet`,
+`CloseEventServlet`) already existed, already tested, already covered by `CorsFilter`'s `/*`
+pattern; this was purely `web-client`-side.
+
+- `src/api/client.js` — 4 new functions (`openEvent`, `participateInEvent`, `submitOrder`,
+  `closeEvent`), same shape as `depositFunds`: no `username` parameter anywhere, since the
+  server always derives the acting identity from the session cookie regardless of what the UI
+  sends.
+- `src/components/EventActionsPanel.jsx` — the orchestrator, same switch-by-status shape as
+  `gui.components.EventActionsPanelBuilder.build`, with **one deliberate divergence from the
+  JavaFX reference**: `OpenEventForm`/`CloseEventForm` are gated in the UI to
+  `username === status.marketMakerUsername` (JavaFX renders both unconditionally for any logged
+  -in user and relies entirely on the server's own `UnauthorizedMarketMakerException`). The
+  server remains the actual authority either way — verified directly (see below) by having a
+  non-MM attempt both actions and confirming the 403 still fires even though the UI wouldn't
+  normally expose the control.
+- `src/components/OpenEventForm.jsx`, `ParticipateForm.jsx`, `OrderSubmissionForm.jsx`,
+  `CloseEventForm.jsx` — one per action, same field sets as their JavaFX counterparts
+  (`EventActionsPanelBuilder`'s participate/open/close forms, `OrderBookPanelBuilder`'s order
+  form), including the per-form "Opening as/Buying as/Trading as/Closing as: `<username>`"
+  captions (kept deliberately, matching the JavaFX client's own Stage 4-5 addition of both a
+  top-bar identity label *and* per-form captions — not redundant with each other there, so not
+  redundant here either). Client-side validation is exactly as minimal as the JavaFX forms'
+  own: only "does this parse as a number" is checked; every business rule (price ceiling,
+  non-positive quantity, selling unheld shares, a blocked user, wrong event status) is left to
+  the server. `OrderSubmissionForm` rounds its price field to exactly 2 decimals before sending,
+  mirroring `OrderBookPanelBuilder.roundToCents`'s own one-line formula and reasoning (an
+  untruncated typed value could leave the mint stage's exact-`d` invariant a fraction of a cent
+  off).
+- `src/components/ActionFeedback.jsx` — one shared success/error banner (new `.success-banner`
+  CSS, same visual family as the pre-existing `.error-banner`) instead of a modal `Alert` —
+  more idiomatic for a single-page layout, same information (`formatters.js` gained
+  `describeTradeConfirmation`/`describeOrderResult`, mirroring `Dialogs.showTradeConfirmation`/
+  `showOrderConfirmation`'s own wording as plain lines).
+- `EventDetail.jsx` gained `username`/`onActionSuccess` props and now renders
+  `EventActionsPanel` beneath its existing read-only sections; `EventsScreen.jsx` passes its
+  own `refresh()` (the same function `usePolling` already calls every tick) as that success
+  callback, so a successful action re-fetches the list *and* the selected event's detail
+  immediately rather than waiting for the next 1s tick — matching every JavaFX action handler's
+  own `coordinator.refreshEvents()`/`refreshUsers()` call. `App.jsx` now threads `username`
+  into `EventsScreen` (previously only `UserScreen` received it).
+- **Verified end-to-end against the real live server**, same technique as the read-only
+  screens: the actual `client.js` module imported and exercised with a real `Origin` header,
+  this time with three separate per-actor cookie jars (mm1/alice/bob — this server has no
+  "log back in as an existing user" concept, so each actor needed its own fresh session) and a
+  freshly uploaded fixture (`Ex4 Verify OB` / `Ex4 Verify LMSR`, uniquified per run) so the run
+  is self-contained and repeatable rather than depending on any earlier session's state. 14
+  assertions, all passing: a non-MM `openEvent` correctly 403s before the real MM's own succeeds
+  (→ `ACTIVE`); three genuinely distinct Order Book scenarios verified against the book's own
+  returned state, not just the acting call's own result -- **resting** (a bid with no
+  counter-order rests in full), **crossing** (a seller who actually holds shares, since Order
+  Book has no LMSR-style infinite MM supply, fills against the resting bid and reduces it),
+  and **mint** (two BUY orders on opposite options whose prices sum to ≥ `d` mint new shares
+  for both sides, confirmed via both the resting-bid reduction and both participants' new share
+  balances); an LMSR `participateInEvent` purchase; and a non-MM `closeEvent` correctly 403s
+  before the real MM's own succeeds (→ `CLOSED`, correct winning option). All 98 `engine` tests
+  and a clean `npm run build` reconfirmed unaffected (no engine/server files touched this
+  round).
+
+### Visual redesign — "Trading Desk" replaced with "System Settings" (pure CSS/markup, revised)
+
+The dark monospace "Trading Desk" theme was replaced with an Apple-utility direction, matching
+macOS System Settings/App Store (system chrome, not marketing pages) rather than the original
+trading-terminal look. Three concrete variations were proposed first (System Settings: flat gray
+page + hairline-bordered white cards; App Store: warm white + floating shadowed cards + pill
+buttons; Settings Utility: pure white, almost no card fill at all) and "System Settings" was
+picked.
+
+**Zero `.jsx` changes anywhere** — confirmed two ways: the production JS bundle is
+byte-identical in size before and after (164.25 kB, unminified-gzip 51.50 kB, 48 modules both
+times) and only `index.html` (dropped the IBM Plex Google Fonts `<link>`s — the real
+`-apple-system`/San Francisco stack needs no webfont, which is also the actual point of this
+direction: native OS chrome, not a branded typeface) and `src/styles.css` (full rewrite) were
+touched. Every existing class name was kept exactly as-is so no component needed a `className`
+change; the one component-level inline `var(--text-dim)` reference (`EventList.jsx`) still
+resolves correctly since the variable name itself didn't change, only its value.
+
+Palette: page `#f5f5f7`, cards `#ffffff` with a `1px solid #d2d2d7` hairline border and **no
+box-shadow anywhere** (flat, per the direction), 12px card radius / 8px controls / 6px badges,
+accent `#0071e3` (Apple's own web/system blue). **Deliberate accessibility adjustment beyond
+what was asked:** Apple's raw system green/red (`#34c759`/`#ff3b30`) read fine as small
+icons/toggles against a light background but fail WCAG AA as body text at that size (~2.5:1
+contrast); the badge/positive-negative/buy-sell text colors use darkened variants
+(`#1a7431`/`#d70015`, both still recognizably "Apple green/red," matching the darker semantic
+label colors Apple's own HIG specifies for light-mode text) instead, with the raw brighter hues
+reserved for `-soft` tint variables not currently used by any component but left defined for a
+future fill-style badge if wanted.

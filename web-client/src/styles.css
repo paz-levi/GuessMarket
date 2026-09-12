@@ -1,0 +1,557 @@
+/* System Settings -- flat, cool light gray page, white hairline-bordered cards, no shadows. Apple's own web/system
+   blue as the one accent. Semantic green/red are deliberately darkened from Apple's raw system green/red (which
+   read fine as small icons/toggles on a light background but fail WCAG AA as body text at ~2.5:1 contrast) so
+   "positive"/"buy"/badge text stays readable at normal text sizes -- the raw hues are kept only as *-soft tints
+   for badge/pill fills, never as the text color itself. */
+
+:root {
+  --bg: #f5f5f7;
+  --bg-panel: #ffffff;
+  --bg-elevated: #fafafa;
+  --bg-hover: #f0f0f2;
+  --border: #d2d2d7;
+  --text: #1d1d1f;
+  --text-dim: #6e6e73;
+  --text-faint: #aeaeb2;
+  --green: #1a7431;
+  --green-soft: rgba(52, 199, 89, 0.14);
+  --red: #d70015;
+  --red-soft: rgba(255, 59, 48, 0.12);
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --accent-soft: rgba(0, 113, 227, 0.12);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+select,
+button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* ---- shell / nav ---- */
+
+.app-shell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.topbar-username {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 24px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-button {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text-dim);
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.tab-button:hover {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  border-bottom-color: transparent;
+}
+
+.tab-button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+.screen {
+  flex: 1;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+/* ---- buttons / inputs ---- */
+
+button {
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 500;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+input[type="text"],
+input[type="number"],
+select {
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+label {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.error-banner {
+  background: var(--red-soft);
+  border: 1px solid rgba(255, 59, 48, 0.35);
+  color: var(--red);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.success-banner {
+  background: var(--green-soft);
+  border: 1px solid rgba(52, 199, 89, 0.35);
+  color: var(--green);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.success-banner div + div {
+  margin-top: 2px;
+}
+
+/* ---- action forms (Open/Participate/Order/Close) ---- */
+
+.action-form {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.action-caption {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.action-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+/* ---- login screen ---- */
+
+.login-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-title {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 22px;
+  text-align: center;
+}
+
+.login-subtitle {
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  margin-top: -12px;
+}
+
+/* ---- panels / layout ---- */
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.panel-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  margin: 0 0 10px 0;
+}
+
+.split {
+  display: flex;
+  gap: 18px;
+  flex: 1;
+  min-height: 0;
+  flex-wrap: wrap;
+}
+
+.split-left {
+  /* A flex-basis of 320px with grow:1 (vs. split-right's grow:2) doesn't hold a fixed percentage -- the actual
+     split drifts with however much space is left over after both bases are subtracted, which measured out to
+     only ~37% of .split's width at a normal desktop size. A first attempt at a fixed 43/57 percentage split
+     (flex: 1 1 43% / 1 1 57%) turned out to be a real CSS flexbox trap, confirmed via a real headless-Chrome
+     trace, not assumed: line-wrap eligibility is decided from each item's UNSHRUNK flex-basis, before flex-shrink
+     ever runs -- and 43%+57% leaves zero slack for .split's 18px gap, so the gap alone pushed the hypothetical
+     line width just over the container's, forcing split-right onto its own line (which then stretched split-left
+     to fill the row above it via its own flex-grow). Fix: flex-basis: 0 so the wrap-decision pass always sees
+     ~0 regardless of gap, with the 43/57 ratio (matching the JavaFX client's own SplitPane
+     dividerPositions="0.48", shifted a bit further toward the detail side since this layout's right-hand content
+     -- stat grid, tables, order books -- is comparatively denser) carried entirely by flex-grow instead, which
+     is resolved AFTER line assignment and so never risks this. min-width: 280px stays as the real narrow-window
+     floor, unrelated to this bug. */
+  flex: 43 1 0;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+}
+
+.split-right {
+  flex: 57 1 0;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ---- filter bar ---- */
+
+.filter-bar {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ---- lists / tables ---- */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  /* Real measurement (headless Chrome, 1680x1000 viewport) showed .split-left stretching correctly to 759px via
+     the existing flex chain, while .list -- a flex item of that column with no flex-grow of its own -- sized to
+     its own content instead (127px for 3 rows) and left the remaining ~630px as dead space below it. The old
+     "max-height: 60vh" here was never the actual binding constraint (127px is already far under even a 600px
+     cap at this viewport height) -- the real bug was simply the missing flex-grow. flex: 1 (with min-height: 0,
+     so it can still shrink below its content size and let overflow-y: auto do the scrolling once there are more
+     rows than fit) makes it fill exactly the column's real available height instead. */
+  flex: 1;
+  min-height: 0;
+}
+
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.list-row:last-child {
+  border-bottom: none;
+}
+
+.list-row:hover {
+  background: var(--bg-hover);
+}
+
+.list-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.list-empty {
+  padding: 16px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.badge-active {
+  color: var(--green);
+}
+
+.badge-not-started {
+  color: var(--text-dim);
+}
+
+.badge-closed {
+  color: var(--red);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--text-dim);
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.num {
+  font-family: var(--font-mono);
+}
+
+.positive {
+  color: var(--green);
+}
+
+.negative {
+  color: var(--red);
+}
+
+.side-buy {
+  color: var(--green);
+}
+
+.side-sell {
+  color: var(--red);
+}
+
+/* ---- event detail ---- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stat {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  margin-top: 2px;
+  color: var(--text);
+}
+
+.order-book-option-header {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 2px solid var(--accent);
+}
+
+.order-book-columns {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.order-book-side {
+  flex: 1 1 200px;
+  min-width: 180px;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.balance-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 26px;
+  color: var(--text);
+}
+
+.blocked-tag {
+  color: var(--red);
+  font-size: 12px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 2px 7px;
+  text-transform: uppercase;
+}
+
+.deposit-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+/* ---- responsive floor ---- */
+
+@media (max-width: 640px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .split {
+    flex-direction: column;
+  }
+}

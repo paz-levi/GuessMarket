@@ -6,6 +6,57 @@ scannable in seconds.
 
 ---
 
+### `f021170` — 2026-09-12 — Ex3 Stage 5: resize verification + final submission packaging (build-submission.bat, isolated cold-start proof)
+
+No `engine`/`gui`/`client` code changed — every resize check on the three screens new since
+Ex2 (`LoginView`, the Users tab's Deposit form + Transaction Ledger, the Chat tab) came back
+correct once measured properly with a real JavaFX harness (off-screen `Stage`s at the app's
+own enforced 640×420 floor, real CSS+layout pass, real computed bounds) rather than assumed by
+analogy. `LoginView` held by construction (its 360px-capped `VBox` never approaches the 640px
+floor); the Chat tab's `ListView` correctly grew via `VBox.vgrow`/no `ScrollPane` (same shape
+as `EventsTab.fxml`'s own list) and a deliberately very long message produced a real, visible
+horizontal scrollbar instead of silent clipping.
+
+**Two harness bugs caught and fixed along the way, not app bugs — both worth recording since
+they're exactly the "surprising result, dig into why" discipline this project already
+values.** First: the Users-tab ledger check initially flagged a "failure" by checking whether
+its Y-position stayed inside the 420px viewport — the wrong criterion entirely for content
+inside a `ScrollPane`, where exceeding the viewport vertically is the *expected* trigger for
+scrolling, not a defect; corrected to check horizontal fit plus "does the real vertical
+scrollbar appear." Second, once that check was added, it still read `visible=false` because
+`lookup(".scroll-bar:vertical")` matched the *first* such node in document order — one of the
+two nested `ListView`s' own internal `VirtualScrollBar` (each independently bounded to 150px
+and correctly not scrolling on its own), not the outer `ScrollPane`'s real bar; fixed by
+filtering to `getClass() == ScrollBar.class` to exclude that package-private subtype, after
+which the real bar correctly reported `visible=true` for content (626px) exceeding the actual
+viewport (417px).
+
+**New `build-submission.bat`** assembles the real two-artifact submission (a pure copy step;
+requires `build.bat` then `build-server.bat` already run in that order) into
+`dist/submission/`: `GuessMarket.war` plus a flat `client/` folder (`client.jar`, `gui.jar`,
+`engine.jar`, `gson-2.11.0.jar`, the whole `javafx-sdk/`, and a freshly-generated
+`run-client.bat`). That `run-client.bat` is a distinct, corrected file, not a copy of the repo
+root's own — the repo-root version assumes a `dist\` subfolder sibling
+(`%~dp0dist\client.jar`) that does not exist in the flat submission layout; caught and fixed
+before it could become a submission-day surprise, per the exact standard the javafx-sdk/
+packaging finding set in Ex2.
+
+**Cold-start proof, isolated copy, nothing else from the repo present:** `dist/submission/`
+copied outside the repo, its WAR deployed to a freshly-restarted Tomcat, and its
+`run-client.bat` actually launched (confirmed a real ~300MB JavaFX process stayed alive). A
+harness using *only* the isolated copy's own jars then drove a full round-trip against the
+isolated server — register/login, `loadEventsFile` on a real Ex3-schema file, `openEvent`, one
+trade (`participateInEvent`), one chat message sent and confirmed round-tripping via
+`getChatDelta` — all passed. Environment restored afterward (isolated deployment torn down,
+dev repo's own WAR copied back to Tomcat's `webapps/`, scratch files removed).
+
+**Environment finding, recorded since it cost real debugging time:** invoking a `.bat` file via
+`cmd.exe /c` from the Bash tool silently does not execute its content at all in this sandbox —
+reproduced down to a trivial one-line `echo` script with no Java involved. PowerShell's
+`Start-Process`/`&` was the reliable path for every `.bat` invocation this entire session
+(build scripts, Tomcat start/stop, and now `run-client.bat`) and is what actually launches
+correctly here.
+
 ### `3fdc72f` — 2026-09-12 — Ex3 Chat bonus: engine.chat.ChatManager, /chat servlets, gui Chat tab (98/98 engine tests, 64/64 Postman assertions)
 
 Built against the lecturer's actual project source (`engine.chat.ChatManager`, `chatWebApp`'s
