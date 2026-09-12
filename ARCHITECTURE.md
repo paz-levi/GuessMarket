@@ -2878,3 +2878,132 @@ unambiguously within this project's zero-tolerance convention) and was reworded 
 before the file was ever considered done.
 
 **Not committed** — left staged for review, per this project's standing workflow.
+
+---
+
+## Exercise 3 — Stage 5: Resize verification + final packaging
+
+**No `gui`/`client`/`engine` code changed this stage.** Every resize check on the three
+screens new since Ex2 (`LoginView.fxml`, the Users tab's Deposit form + Transaction Ledger,
+the Chat tab) came back genuinely correct on the first real read, once measured properly — not
+assumed. Two new build artifacts: `build-submission.bat` and `dist/submission/`.
+
+### Resize — verified with a real JavaFX harness, not by analogy
+
+A throwaway harness (`Platform.startup`, off-screen `Stage`s so nothing visibly flashed) loaded
+each real screen at exactly the app's own enforced floor — `ClientApp.setMinWidth(640)`/
+`setMinHeight(420)` — forced a real CSS+layout pass, and read back actual computed bounds.
+
+- **`LoginView.fxml`:** its `VBox` (`maxWidth="360"`) stayed fully within the 640×420 scene,
+  `usernameField`/`loginButton` both measured real (>0) widths. Confirmed by construction, not
+  just arithmetic: the Stage-level 640px floor already exceeds the VBox's 360px cap plus
+  padding, so this screen can never actually be squeezed.
+- **`ChatTab.fxml`:** populated with 25 messages plus one deliberately very long one.
+  `chatListView` (via `VBox.vgrow="ALWAYS"`, no `ScrollPane` wrapper — the exact same shape as
+  `EventsTab.fxml`'s own `eventsListView`) got real width/height, the input row stayed fully
+  within scene bounds, and scrolling to the long message made a real horizontal `ScrollBar`
+  node appear and report `visible=true` — the same recoverable-via-scrolling pattern this app's
+  other `ListView`s (events/users/participation) already rely on instead of per-cell wrapping.
+- **Users tab, own-account view (Deposit form + Transaction Ledger):** rendered via a
+  reflection-based harness invoking the real (private) `UsersTabController.renderUserDetails`
+  with a hand-built 15-line ledger — same evidentiary standard already used elsewhere in this
+  project (see `OrderBookPanelBuilder`'s own verification notes). Both the deposit `HBox` and
+  the ledger `ListView` measured widths that exactly matched their parent's available content
+  width (614px viewport minus 2×14px padding = the observed 286.67px), and the Deposit button
+  never got squeezed below its own preferred width.
+  - **One real bug found and fixed — in the harness itself, not the app.** The first pass
+    reported the ledger as failing to "fit" because its Y coordinate (correctly) extended past
+    the 420px viewport — the wrong criterion entirely for content inside a `ScrollPane`, where
+    exceeding the current viewport vertically is the *expected* trigger for scrolling, not a
+    defect. Corrected to check horizontal fit plus "does the enclosing `ScrollPane`'s own
+    vertical `ScrollBar` actually become visible" — which surfaced a second, more subtle
+    harness bug: `lookup(".scroll-bar:vertical")` matched the *first* such node in document
+    order, which was one of the two nested `ListView`s' own internal `VirtualScrollBar`
+    (`participationListView`/`ledgerListView`, each independently bounded to 150px and
+    correctly *not* scrolling on their own) rather than the outer `ScrollPane`'s real bar.
+    Fixed by filtering to `getClass() == ScrollBar.class` (excluding the package-private
+    `VirtualScrollBar` subtype `ListView` uses internally) — confirmed the real outer vertical
+    bar is present and `visible=true` once content (626px) exceeds the actual viewport
+    (417.33px). Recorded because it's exactly the kind of "surprising empirical result — dig
+    into why before concluding a fix is needed" case this project's own harness-over-analogy
+    discipline exists for.
+- **Not independently verified — needs the user's own check, same boundary already drawn for
+  every prior resize stage:** actual pixel-level visual judgment (does it *look* right, not
+  just measure right) on a real, visible launch.
+
+### Packaging — `build-submission.bat` + `dist/submission/`
+
+- **WAR re-confirmed clean after the Chat additions:** `jar tf dist/GuessMarket.war` shows
+  exactly `WEB-INF/lib/{engine.jar,gson-2.11.0.jar}`, no `servlet-api.jar`, and both
+  `SendChatServlet`/`GetChatServlet` present under `WEB-INF/classes/server/servlets/`.
+- **New `build-submission.bat`** (repo root) — a pure assembly step (compiles nothing itself;
+  requires `build.bat` then `build-server.bat` already run, in that order, since `build.bat`
+  wipes `dist/` wholesale) that produces:
+  ```
+  dist/submission/
+    GuessMarket.war
+    client/
+      client.jar
+      gui.jar
+      engine.jar
+      gson-2.11.0.jar
+      javafx-sdk/          (the whole SDK, same "must work with no JavaFX pre-installed"
+                             standard already established for the repo root's own copy)
+      run-client.bat
+  ```
+- **The submission's own `run-client.bat` is a distinct file from the repo root's `run-client.bat`**,
+  not a copy — the repo-root one assumes a `dist\` subfolder sibling (`%~dp0dist\client.jar`),
+  which does not exist inside the submission (a flat `client/` folder, jars alongside the
+  `.bat` directly, matching `client.jar`'s own manifest `Class-Path: engine.jar gui.jar
+  gson-2.11.0.jar`, which is resolved relative to wherever `client.jar` itself sits). Generated
+  fresh each run to `%~dp0client.jar` instead. Caught by design, not after the fact — exactly
+  the category of mistake the user flagged as submission-day-critical up front.
+
+### Cold-start proof — an isolated copy, nothing else from the repo present
+
+1. `dist/submission/` copied to a directory entirely outside the repo (a scratch location);
+   confirmed by listing it that it contains only `GuessMarket.war` and `client/` — nothing else.
+2. That copy's `GuessMarket.war` deployed to a freshly-restarted Tomcat (the *previous*
+   deployment's WAR + exploded directory removed first, so nothing carried over); `GET /events`
+   returned 200 from a clean start.
+3. **Real launch proof:** the isolated copy's own `run-client.bat` was actually run (via
+   PowerShell's `Start-Process` — a real, repeatable Bash-tool finding this stage: invoking a
+   `.bat` file via `cmd.exe /c` from the Bash tool does not execute its content in this sandbox
+   at all, silently, even for a trivial one-line `echo` script with no Java involved; PowerShell
+   has been the reliable path for every `.bat` invocation all session and was used here too).
+   Confirmed a real `java.exe` process launched and stayed alive (~300MB resident, consistent
+   with a genuine JavaFX graphics process, not an immediate crash) for over 10 seconds before
+   being closed.
+4. **Functional end-to-end proof**, using the isolated copy's own `engine.jar`/`client.jar`/
+   `gui.jar` on the classpath (nothing from the dev repo's `out/`) against the freshly-deployed
+   isolated WAR: a small harness calling `HttpEngineClient` directly —
+   register/login → `loadEventsFile("test_files/ex3small.xml", ...)` (a real Ex3-schema file,
+   picked from its normal repo location — realistic, since a grader's own file wouldn't be
+   bundled in the submission either, exactly what a `FileChooser` would point at) → `openEvent`
+   → `participateInEvent` (one trade action, 5 shares) → `sendChatMessage` +
+   `getChatDelta(0)` (one chat message, confirmed to round-trip) — **all passed**:
+   ```
+   Registered and logged in as ColdStartUser1789198266027
+   Loaded events file: C:\PROJECTS\GuessMarket\test_files\ex3small.xml
+   Event loaded: Mujtaba is Dead (status NOT_STARTED)
+   Deposited 1000.00, balance now 1000.0
+   Opened event -- status now ACTIVE, MM account balance 69.31471805599453
+   Trade action: bought 5 shares of option 1 -- total paid 2.6578090826008216, commission 0.1265623372667058
+   Chat message sent -- server version now 1
+   Chat message round-trips via GET /chat: true
+
+   COLD-START END-TO-END CHECK: ALL PASSED
+   ```
+5. **Not independently verified — needs the user's own check:** literally clicking through the
+   real running GUI by hand (this stage proved the isolated jars launch correctly and that the
+   exact same `HttpEngineClient` class they contain works end to end against the isolated WAR,
+   but did not drive the actual on-screen controls by mouse).
+6. Environment restored afterward: isolated Tomcat deployment torn down, the dev repo's own
+   `dist/GuessMarket.war` copied back into Tomcat's `webapps/` (not started), all scratch files
+   removed.
+
+### Confirmed still true
+- Base URL is `http://localhost:8080/GuessMarket`, hardcoded in `ClientApp.BASE_URL` — matches
+  the spec's own assumption.
+- The WAR's filename (`GuessMarket.war`) is stable and produced identically by
+  `build-server.bat` every run — nothing renames it.

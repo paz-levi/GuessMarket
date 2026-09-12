@@ -6,6 +6,60 @@ scannable in seconds.
 
 ---
 
+### `3fdc72f` — 2026-09-12 — Ex3 Chat bonus: engine.chat.ChatManager, /chat servlets, gui Chat tab (98/98 engine tests, 64/64 Postman assertions)
+
+Built against the lecturer's actual project source (`engine.chat.ChatManager`, `chatWebApp`'s
+servlets, the JavaFX `ChatAreaController`), not just the transcript — three deliberate,
+disclosed deviations from their exact implementation. `IEngine`/`EngineImpl` untouched: chat is
+a new `engine.chat` package with no relationship to `IEngine` at all, since a single global feed
+is not an engine capability the way every existing method is (same reasoning that already keeps
+`dto.LedgerDeltaDto` outside `IEngine`).
+
+**Deviation 1 — one atomic method instead of their two-layer locking.** Their `ChatManager`
+self-synchronizes each method AND their servlet separately wraps `getVersion()`+
+`getChatEntries()` in `synchronized(getServletContext())` (their own class Javadoc says this
+second layer is required). Here, `ChatManager.getVersionAndEntries(int since)` does both reads
+under one internal lock, so `GetChatServlet` never needs to know locking exists — matching how
+`EngineImpl`'s own `ReentrantReadWriteLock` already keeps locking internal to the class it
+protects. `postMessage(username, text)` returns the identical `ChatDeltaDto` shape, already
+advanced past the just-added message, so a sender's own next poll can't re-see its own message.
+`since >= version` (not `==`) is the boundary — a poller sitting exactly caught up is the
+ordinary steady state, not an edge case. `List.copyOf(...)` on the `subList` before releasing
+the lock avoids exposing a live view onto the backing list, a genuine improvement over their
+own exposed-subList approach.
+
+**Deviation 2 — POST, not GET, for sending.** Their `SendChatServlet` uses `doGet` for a
+mutating action; kept `POST /chat/send` instead, consistent with every other write-capable
+endpoint already in this project (login, deposit, open, participate, submitOrder, close).
+
+**Deviation 3 — kept `java.net.http.HttpClient`, did not switch to OkHttp.** Confirmed directly
+from their real `ChatAreaController.java` (`HttpUrl.Builder`, `okhttp3.Callback`) that their own
+demo uses OkHttp for this feature specifically — not just inferred from the transcript. Switching
+libraries for one feature would mean two HTTP stacks coexisting in this client for no functional
+benefit, when login/trading/deposits/ledger already work correctly on `HttpClient`; two new
+`HttpEngineClient` methods (`getChatDelta`/`sendChatMessage`) added on the existing stack instead.
+
+**GET /chat requires login too, not just POST — a deliberate choice, not the default.** Unlike
+`EventStatusServlet`/`EventsListServlet`'s public-market-data reads, which stay open to anyone,
+both chat endpoints call `SessionUtils.requireLoggedInUsername(request)` — the spec frames chat
+specifically as logged-in users chatting with each other in both directions, not public data.
+
+Client: `gui.tabs.ChatTabController` (new third top-level tab, `ChatTab.fxml`) takes plain
+`Function`/`IntFunction` references for send/poll — same decoupling `UsersTabController
+.pollLedger` already established — so `gui` never depends on `client.http`. `ClientApp` folds
+`pollChat` into the existing 1000ms `Timer` tick alongside `refreshEvents`/`refreshUsers`/
+`pollLedger`, no second `Timer`. One shared `applyDelta` handles both the instant local echo and
+every periodic poll.
+
+Verified: `test.bat` 98/98 (92 existing + 6 new `ChatManagerTest`, including a 20-thread
+concurrent-post case); `server`/`client`/`gui` build clean (`ui` module's failure is the
+pre-existing, documented Stage-1 breakage); full Postman collection (new `03 Chat` folder plus
+two new unauthenticated-401 cases in `02 Error cases`) — 64/64 assertions on a freshly-restarted
+server; a real two-`HttpEngineClient`-instance harness (not just curl) confirmed B's own
+last-seen-version poll sees exactly A's one new message and nothing more on the next poll.
+Satisfies the Chat bonus scope and CLAUDE.md Section 7's mandatory FXML `--`-comment grep
+(`ChatTab.fxml`/`MainView.fxml` both clean).
+
 ### `8b45ab4` — 2026-09-11 — Ex3: always-visible "Logged in as: <username>" header label; 4th `--`-in-XML-comment recurrence and its process fix
 
 Small, user-suggested UX addition: a `loggedInUserLabel` in `MainView.fxml`'s header `HBox`,
